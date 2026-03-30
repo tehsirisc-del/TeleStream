@@ -1,0 +1,10 @@
+{
+  "appId": "com.streamcatz.tv",
+  "appName": "StreamCatz TV",
+  "webDir": "www",
+  "server": {
+    "cleartext": true,
+    "androidScheme": "http",
+    "allowNavigation": ["*"]
+  }
+}

@@ -1,0 +1,16 @@
+node_modules/
+.env
+catalog.db
+database.db
+logcat_dump.txt
+*.log
+dist/
+build/
+www/
+android/.gradle/
+android/app/build/
+android/local.properties
+android/capturing/
+android/.idea/
+.DS_Store
+node_modules

@@ -1,0 +1,506 @@
+package com.streamcatz.tv.plugins;
+
+import android.app.Dialog;
+import android.graphics.Color;
+import android.graphics.drawable.ColorDrawable;
+import android.net.Uri;
+import android.util.Log;
+import android.view.Window;
+import android.view.WindowManager;
+
+import androidx.media3.common.MediaItem;
+import androidx.media3.common.PlaybackParameters;
+import androidx.media3.exoplayer.DefaultLoadControl;
+import androidx.media3.exoplayer.DefaultRenderersFactory;
+import androidx.media3.exoplayer.trackselection.DefaultTrackSelector;
+import androidx.media3.exoplayer.ExoPlayer;
+import androidx.media3.exoplayer.source.MediaSource;
+import androidx.media3.exoplayer.source.ProgressiveMediaSource;
+import androidx.media3.ui.PlayerView;
+
+import com.getcapacitor.JSObject;
+import com.getcapacitor.Plugin;
+import com.getcapacitor.PluginCall;
+import com.getcapacitor.PluginMethod;
+import com.getcapacitor.annotation.CapacitorPlugin;
+
+import java.io.BufferedReader;
+import java.io.BufferedWriter;
+import java.io.InputStreamReader;
+import java.io.OutputStreamWriter;
+import java.net.ServerSocket;
+import java.net.Socket;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+
+@CapacitorPlugin(name = "StreamPlayer")
+public class StreamPlayerPlugin extends Plugin {
+
+    private static final String TAG = "StreamPlayer";
+    private ExoPlayer player;
+    private PlayerView playerView;
+    private Dialog dialog;
+
+    private android.widget.TextView debugTextView;
+    private android.widget.ScrollView debugScrollView;
+
+    private ShareServer shareServer = null;
+
+    private BridgeDataSource currentBridgeDataSource;
+    private LocalFeedServer localFeedServer;
+
+    @PluginMethod
+    public void play(PluginCall call) {
+        final long messageId = Long.parseLong(call.getString("messageId", "0"));
+        final String channel = call.getString("channel", "");
+        final String title = call.getString("title", "Video");
+        final long fileSize = call.getLong("fileSize", 0L);
+        final long seekTo = call.getLong("progress", 0L) * 1000L;
+        final long seekStepMs = call.getLong("seekStep", 15L) * 1000L;
+
+        Log.d(TAG, "play() messageId=" + messageId
+                + " channel=" + channel + " title=" + title
+                + " fileSize=" + fileSize + " seekTo=" + seekTo + " seekStep=" + seekStepMs);
+
+        getActivity().runOnUiThread(() -> {
+            try {
+                releasePlayer();
+                setupPlayerAndDialog(channel, messageId, fileSize, title, seekTo, seekStepMs);
+                call.resolve();
+            } catch (Exception e) {
+                Log.e(TAG, "setupPlayerAndDialog failed", e);
+                call.reject(e.getMessage());
+            }
+        });
+    }
+
+    @PluginMethod
+    public void provideChunk(PluginCall call) {
+        // Obsolete: Replaced by local HTTP streaming
+        JSObject ret = new JSObject();
+        ret.put("accepted", true);
+        call.resolve(ret);
+    }
+
+    @PluginMethod
+    public void close(PluginCall call) {
+        getActivity().runOnUiThread(() -> {
+            releasePlayer();
+            call.resolve();
+        });
+    }
+
+    @PluginMethod
+    public void startShareServer(PluginCall call) {
+        String token = call.getString("token", "");
+        if (shareServer != null) {
+            shareServer.stopServer();
+        }
+        shareServer = new ShareServer(token);
+        shareServer.start();
+        call.resolve();
+    }
+
+    @PluginMethod
+    public void stopShareServer(PluginCall call) {
+        if (shareServer != null) {
+            shareServer.stopServer();
+            shareServer = null;
+        }
+        if (call != null)
+            call.resolve();
+    }
+
+    @PluginMethod
+    public void logToNative(PluginCall call) {
+        String msg = call.getString("msg", "");
+        String level = call.getString("level", "info");
+        updateNativeDebug("[" + level.toUpperCase() + "] " + msg);
+        call.resolve();
+    }
+
+    public void updateNativeDebug(final String text) {
+        getActivity().runOnUiThread(() -> {
+            if (debugTextView != null) {
+                String time = new java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US)
+                        .format(new java.util.Date());
+                debugTextView.append("[" + time + "] " + text + "\n");
+                debugScrollView.post(() -> debugScrollView.fullScroll(android.view.View.FOCUS_DOWN));
+            }
+        });
+    }
+
+    private void releasePlayer() {
+        if (currentBridgeDataSource != null) {
+            currentBridgeDataSource.stopJsStream(); // Unblocks any indefinitely hanging read() loop immediately
+            currentBridgeDataSource = null;
+        }
+        if (player != null) {
+            player.stop();
+            player.release();
+            player = null;
+        }
+        if (dialog != null) {
+            dialog.dismiss();
+            dialog = null;
+        }
+        if (localFeedServer != null) {
+            localFeedServer.stopServer();
+            localFeedServer = null;
+        }
+    }
+
+    private void setupPlayerAndDialog(String channel, long messageId, long fileSize, String title,
+            long seekTo, long seekStepMs) {
+        Log.d(TAG, "setupPlayerAndDialog title=" + title);
+
+        // ── Full-screen dialog ──────────────────────────────────────────────────
+        dialog = new Dialog(getContext(), android.R.style.Theme_Black_NoTitleBar_Fullscreen);
+
+        android.widget.FrameLayout rootLayout = new android.widget.FrameLayout(getContext());
+        playerView = new PlayerView(getContext());
+        rootLayout.addView(playerView);
+
+        // ── Native Debug Console ────────────────────────────────────────────────
+        debugScrollView = new android.widget.ScrollView(getContext());
+        debugScrollView.setLayoutParams(new android.widget.FrameLayout.LayoutParams(
+                (int) (getContext().getResources().getDisplayMetrics().widthPixels * 0.45),
+                (int) (getContext().getResources().getDisplayMetrics().heightPixels * 0.6)));
+        debugScrollView.setBackgroundColor(Color.argb(200, 0, 0, 0));
+        debugScrollView.setPadding(20, 20, 20, 20);
+        debugScrollView.setVisibility(android.view.View.GONE); // Default off
+
+        debugTextView = new android.widget.TextView(getContext());
+        debugTextView.setTextColor(Color.GREEN);
+        debugTextView.setTypeface(android.graphics.Typeface.MONOSPACE);
+        debugTextView.setTextSize(10);
+        debugTextView.setText("--- Native Debug Console ---\n");
+        debugTextView.append("Device: " + android.os.Build.MODEL + "\n");
+        debugScrollView.addView(debugTextView);
+        rootLayout.addView(debugScrollView);
+
+        // ── Toggle Debug Button ────────────────────────────────────────────────
+        android.widget.Button debugToggleBtn = new android.widget.Button(getContext());
+        debugToggleBtn.setText("Toggle Debug");
+        debugToggleBtn.setAllCaps(false);
+        debugToggleBtn.setTextSize(10);
+        debugToggleBtn.setAlpha(0.3f); // Subtle when not focused
+        debugToggleBtn.setBackgroundColor(Color.TRANSPARENT);
+
+        android.widget.FrameLayout.LayoutParams btnParams = new android.widget.FrameLayout.LayoutParams(
+                WindowManager.LayoutParams.WRAP_CONTENT,
+                WindowManager.LayoutParams.WRAP_CONTENT);
+        btnParams.gravity = android.view.Gravity.TOP | android.view.Gravity.RIGHT;
+        btnParams.setMargins(0, 10, 10, 0);
+        debugToggleBtn.setLayoutParams(btnParams);
+        debugToggleBtn.setFocusable(true);
+        debugToggleBtn.setFocusableInTouchMode(true);
+
+        debugToggleBtn.setOnClickListener(v -> {
+            int vis = debugScrollView.getVisibility() == android.view.View.VISIBLE ? android.view.View.GONE
+                    : android.view.View.VISIBLE;
+            debugScrollView.setVisibility(vis);
+        });
+
+        // Visually change when focused so TV users know they are on it
+        debugToggleBtn.setOnFocusChangeListener((v, hasFocus) -> {
+            if (hasFocus) {
+                debugToggleBtn.setAlpha(1.0f);
+                debugToggleBtn.setBackgroundColor(Color.argb(100, 255, 255, 255));
+            } else {
+                debugToggleBtn.setAlpha(0.3f);
+                debugToggleBtn.setBackgroundColor(Color.TRANSPARENT);
+            }
+        });
+
+        rootLayout.addView(debugToggleBtn);
+
+        dialog.setContentView(rootLayout);
+
+        Window window = dialog.getWindow();
+        if (window != null) {
+            window.setLayout(WindowManager.LayoutParams.MATCH_PARENT,
+                    WindowManager.LayoutParams.MATCH_PARENT);
+            window.setBackgroundDrawable(new ColorDrawable(Color.BLACK));
+        }
+
+        // ── HIGH-PERFORMANCE LoadControl ────────────────────────────────────────
+        // bufferForPlaybackMs=3000: gives the demuxer time to find BOTH audio+video
+        // track headers before playback begins → eliminates A/V desync.
+        DefaultLoadControl loadControl = new DefaultLoadControl.Builder()
+                .setBufferDurationsMs(
+                        30_000, // minBufferMs — 30s
+                        120_000, // maxBufferMs — 120s
+                        3_000, // bufferForPlaybackMs 
+                        5_000 // bufferForPlaybackAfterRebufferMs
+                )
+                .setTargetBufferBytes(100 * 1024 * 1024) // 100MB RAM Target to prevent progressive starvation
+                .setPrioritizeTimeOverSizeThresholds(true)
+                .build();
+
+        // ── Hardware & Sync Fixes ───────────────────────────────────────────────
+        DefaultRenderersFactory renderersFactory = new DefaultRenderersFactory(getContext())
+                .setEnableDecoderFallback(false); // CRITICAL: Disable software fallback which causes permanent desync on TV
+
+        DefaultTrackSelector trackSelector = new DefaultTrackSelector(getContext());
+        // Enable Hardware Tunneling on Android TV. Routes audio/video directly to hardware for perfect sync.
+        trackSelector.setParameters(trackSelector.buildUponParameters().setTunnelingEnabled(true));
+
+        // ── ExoPlayer ───────────────────────────────────────────────────────────
+        player = new ExoPlayer.Builder(getContext())
+                .setRenderersFactory(renderersFactory)
+                .setTrackSelector(trackSelector)
+                .setLoadControl(loadControl)
+                .setSeekForwardIncrementMs(seekStepMs)
+                .setSeekBackIncrementMs(seekStepMs)
+                .build();
+
+        // Enforce strict 1.0x playback speed without pitch bending algorithms which can skew sync over time
+        player.setPlaybackParameters(new PlaybackParameters(1.0f, 1.0f));
+
+        player.addListener(new androidx.media3.common.Player.Listener() {
+            @Override
+            public void onPlayerError(androidx.media3.common.PlaybackException error) {
+                updateNativeDebug("PLAYER_ERROR: " + error.getMessage() + " (" + error.getErrorCodeName() + ")");
+                Log.e(TAG, "ExoPlayer Error: " + error.getMessage(), error);
+            }
+
+            @Override
+            public void onPlaybackStateChanged(int playbackState) {
+                String state = "UNKNOWN";
+                if (playbackState == androidx.media3.common.Player.STATE_BUFFERING)
+                    state = "BUFFERING";
+                if (playbackState == androidx.media3.common.Player.STATE_READY)
+                    state = "READY";
+                if (playbackState == androidx.media3.common.Player.STATE_ENDED)
+                    state = "ENDED";
+                updateNativeDebug("PlaybackState: " + state);
+            }
+        });
+
+        playerView.setPlayer(player);
+        playerView.setUseController(true);
+        playerView.requestFocus();
+
+        // Toggle debug console with a key (DPAD_UP for TV)
+        playerView.setOnKeyListener((v, keyCode, event) -> {
+            if (event.getAction() == android.view.KeyEvent.ACTION_DOWN &&
+                    (keyCode == android.view.KeyEvent.KEYCODE_DPAD_UP
+                            || keyCode == android.view.KeyEvent.KEYCODE_MENU)) {
+                if (debugScrollView != null) {
+                    int vis = debugScrollView.getVisibility() == android.view.View.VISIBLE ? android.view.View.GONE
+                            : android.view.View.VISIBLE;
+                    debugScrollView.setVisibility(vis);
+                    return true;
+                }
+            }
+            return false;
+        });
+
+        // ── DataSource (Bridge + LocalFeedServer) ─────────────────────────
+        currentBridgeDataSource = new BridgeDataSource(this, channel, messageId, fileSize);
+
+        localFeedServer = new LocalFeedServer();
+        localFeedServer.setActiveDataSource(currentBridgeDataSource);
+        localFeedServer.start();
+
+        // 🛑 REMOVED ExoCacheManager to prevent I/O disk bottlenecks on cheap TV eMMC flash drives!
+        // Writing a multi-gigabyte video stream to disk while decoding causes fatal I/O stalls and A/V desync.
+        androidx.media3.datasource.DataSource.Factory dataSourceFactory = () -> currentBridgeDataSource;
+
+        MediaSource mediaSource = new ProgressiveMediaSource.Factory(dataSourceFactory)
+                .createMediaSource(MediaItem.fromUri(currentBridgeDataSource.getUri()));
+
+        player.setMediaSource(mediaSource);
+        player.prepare();
+
+        if (seekTo > 0) {
+            player.seekTo(seekTo);
+        }
+        player.setPlayWhenReady(true);
+
+        // ── Dialog lifecycle ────────────────────────────────────────────────────
+        final ExoPlayer thisPlayer = player;
+        final Dialog thisDialog = dialog;
+
+        dialog.setOnDismissListener(d -> {
+            Log.d(TAG, "dialog dismissed — releasing player");
+
+            if (player == thisPlayer) {
+                player = null;
+            }
+            if (thisPlayer != null) {
+                thisPlayer.release();
+            }
+
+            if (dialog == thisDialog && bridge != null) {
+                bridge.triggerWindowJSEvent("player_closed", "{}");
+            }
+        });
+
+        dialog.show();
+    }
+
+    public void emitEvent(String eventName, JSObject data) {
+        notifyListeners(eventName, data);
+    }
+
+    /** Helper for debugging on-screen. */
+    public void emitDebug(String msg, String level) {
+        JSObject data = new JSObject();
+        data.put("msg", msg);
+        data.put("level", level);
+        emitEvent("debug_event", data);
+    }
+
+    /**
+     * Minimal On-Demand HTTP Server to handle "Share Link from Phone".
+     * Serves an embedded HTML page and accepts link submissions via POST.
+     */
+    private class ShareServer extends Thread {
+        private final String token;
+        private ServerSocket serverSocket;
+        private boolean running = true;
+        private final ExecutorService executor = Executors.newFixedThreadPool(2);
+
+        public ShareServer(String token) {
+            this.token = token;
+        }
+
+        public void stopServer() {
+            running = false;
+            try {
+                if (serverSocket != null)
+                    serverSocket.close();
+            } catch (Exception ignored) {
+            }
+            executor.shutdownNow();
+        }
+
+        @Override
+        public void run() {
+            try {
+                serverSocket = new ServerSocket(9991);
+                Log.d(TAG, "ShareServer started on port 9991. Token=" + token);
+                while (running) {
+                    Socket client = serverSocket.accept();
+                    executor.execute(() -> handleClient(client));
+                }
+            } catch (Exception e) {
+                if (running)
+                    Log.e(TAG, "ShareServer Error: " + e.getMessage());
+            }
+        }
+
+        private void handleClient(Socket socket) {
+            try (BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
+                    BufferedWriter out = new BufferedWriter(new OutputStreamWriter(socket.getOutputStream()))) {
+
+                String line = in.readLine();
+                if (line == null)
+                    return;
+
+                String[] parts = line.split(" ");
+                if (parts.length < 2)
+                    return;
+
+                String method = parts[0];
+                String path = parts[1];
+
+                int contentLength = 0;
+                // Parse headers
+                while ((line = in.readLine()) != null && !line.isEmpty()) {
+                    if (line.toLowerCase().startsWith("content-length:")) {
+                        contentLength = Integer.parseInt(line.substring(15).trim());
+                    }
+                }
+
+                if (method.equals("OPTIONS")) {
+                    sendResponse(out, 200, "text/plain", "");
+                    return;
+                }
+
+                if (path.contains("favicon.ico")) {
+                    sendResponse(out, 404, "text/plain", "");
+                    return;
+                }
+
+                if (method.equals("GET") && path.startsWith("/share.html")) {
+                    sendResponse(out, 200, "text/html", getShareHtml());
+                } else if (method.equals("POST") && path.equals("/api/share/submit")) {
+                    char[] bodyChars = new char[contentLength];
+                    int read = 0;
+                    while (read < contentLength) {
+                        int r = in.read(bodyChars, read, contentLength - read);
+                        if (r == -1)
+                            break;
+                        read += r;
+                    }
+
+                    String payload = new String(bodyChars);
+                    if (payload.contains("\"token\":\"" + token + "\"")) {
+                        int linkIdx = payload.indexOf("\"link\":\"");
+                        if (linkIdx != -1) {
+                            String link = payload.substring(linkIdx + 8, payload.indexOf("\"", linkIdx + 8));
+                            JSObject data = new JSObject();
+                            data.put("link", link);
+                            if (StreamPlayerPlugin.this.bridge != null) {
+                                StreamPlayerPlugin.this.bridge.triggerWindowJSEvent("link_shared", data.toString());
+                            }
+                            sendResponse(out, 200, "application/json", "{\"success\":true}");
+                        } else {
+                            sendResponse(out, 400, "application/json", "{\"error\":\"Missing link\"}");
+                        }
+                    } else {
+                        sendResponse(out, 403, "application/json", "{\"error\":\"Invalid token\"}");
+                    }
+                } else {
+                    sendResponse(out, 404, "text/plain", "Not Found");
+                }
+            } catch (Exception e) {
+                Log.e(TAG, "Socket Error: " + e.getMessage());
+            } finally {
+                try {
+                    socket.close();
+                } catch (Exception ignored) {
+                }
+            }
+        }
+
+        private void sendResponse(BufferedWriter out, int code, String type, String body) throws Exception {
+            out.write("HTTP/1.1 " + code + (code == 200 ? " OK" : " Error") + "\r\n");
+            out.write("Content-Type: " + type + "; charset=utf-8\r\n");
+            out.write("Content-Length: " + body.getBytes("UTF-8").length + "\r\n");
+            out.write("Access-Control-Allow-Origin: *\r\n");
+            out.write("Connection: close\r\n");
+            out.write("\r\n");
+            out.write(body);
+            out.flush();
+        }
+
+        private String getShareHtml() {
+            // Embedded minimal version of share.html for standalone operation
+            return "<!DOCTYPE html><html><head>" +
+                    "<meta charset='UTF-8'><meta name='viewport' content='width=device-width,initial-scale=1'>" +
+                    "<title>Send to Screen</title>" +
+                    "<style>body{background:#0f172a;color:#fff;font-family:sans-serif;text-align:center;padding:40px 20px;}"
+                    +
+                    "h1{color:#38bdf8;}input{width:100%;padding:15px;border-radius:8px;border:1px solid #334155;background:#1e293b;color:#fff;margin:20px 0;}"
+                    +
+                    "button{width:100%;padding:15px;border-radius:8px;background:#3b82f6;color:#fff;border:none;font-weight:bold;}</style></head>"
+                    +
+                    "<body><h1>📱 Send to Screen</h1><p>Paste Link:</p>" +
+                    "<input id='l' placeholder='https://t.me/...'><button id='b'>Send Link</button>" +
+                    "<script>document.getElementById('b').onclick=async()=>{ " +
+                    "const l=document.getElementById('l').value; const t=new URLSearchParams(window.location.search).get('token');"
+                    +
+                    "document.getElementById('b').disabled=true; document.getElementById('b').innerText='Sending...';" +
+                    "try{ const r=await fetch('/api/share/submit',{method:'POST',body:JSON.stringify({token:t,link:l})});"
+                    +
+                    "if(r.ok) alert('Sent!'); else alert('Failed'); }catch(e){alert(e);}" +
+                    "document.getElementById('b').disabled=false; document.getElementById('b').innerText='Send Link'; };"
+                    +
+                    "</script></body></html>";
+        }
+    }
+}

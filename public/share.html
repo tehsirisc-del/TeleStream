@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Send to Screen - Telegram Video Streamer</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Inter', system-ui, sans-serif; }
+    body { background-color: #0f172a; color: #f8fafc; height: 100vh; padding: 20px; text-align: center; }
+    h1 { font-size: 1.5rem; margin-top: 40px; margin-bottom: 8px; color: #38bdf8; }
+    p { font-size: 0.95rem; color: #cbd5e1; margin-bottom: 30px; }
+    
+    .styled-input {
+      width: 100%;
+      background: #1e293b;
+      border: 2px solid #334155;
+      color: #e2e8f0;
+      border-radius: 12px;
+      padding: 16px;
+      font-size: 1rem;
+      outline: none;
+      margin-bottom: 20px;
+      transition: all 0.2s;
+    }
+    .styled-input:focus { border-color: #3b82f6; }
+    
+    .primary-btn {
+      width: 100%;
+      background: #3b82f6;
+      color: white;
+      border: none;
+      padding: 16px;
+      border-radius: 12px;
+      font-size: 1.1rem;
+      font-weight: 600;
+      cursor: pointer;
+      box-shadow: 0 4px 14px rgba(59, 130, 246, 0.4);
+    }
+    .primary-btn:active { transform: scale(0.98); }
+    
+    .status { margin-top: 20px; font-weight: 500; }
+    .success { color: #10b981; }
+    .error { color: #ef4444; }
+  </style>
+</head>
+<body>
+
+  <h1>📱 Send to Screen</h1>
+  <p>Paste a Telegram message link below. It will automatically open on your desktop screen.</p>
+
+  <input type="url" id="linkInput" class="styled-input" placeholder="https://t.me/channel/123" />
+  <button id="sendBtn" class="primary-btn">Send Link</button>
+  
+  <div id="status" class="status"></div>
+
+<script>
+  const params = new URLSearchParams(window.location.search);
+  const token = params.get('token');
+  const txt = params.get('text'); // For Web Share Target API
+
+  const input = document.getElementById('linkInput');
+  const btn = document.getElementById('sendBtn');
+  const statusEl = document.getElementById('status');
+
+  if (!token) {
+    statusEl.className = 'status error';
+    statusEl.innerHTML = 'Error: Link is invalid or expired. Please scan the QR code from your screen again.';
+    btn.disabled = true;
+  }
+
+  // Pre-fill if we received link via OS Share Dialog (Telegram generic text)
+  if (txt) {
+    const urls = txt.match(/https?:\/\/[^\s]+/g);
+    if (urls) input.value = urls[0];
+    else input.value = txt;
+  }
+
+  btn.addEventListener('click', async () => {
+    const link = input.value.trim();
+    if (!link) return;
+
+    btn.textContent = 'Sending...';
+    btn.disabled = true;
+
+    try {
+      const res = await fetch('/api/share/submit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token, link })
+      });
+      const data = await res.json();
+      
+      if (data.success) {
+        statusEl.className = 'status success';
+        statusEl.innerText = 'Sent successfully! Watch your screen.';
+        input.value = '';
+        setTimeout(() => {
+           statusEl.innerText = '';
+           btn.textContent = 'Send Link';
+           btn.disabled = false;
+        }, 2000);
+      } else {
+        throw new Error(data.error || 'Server error');
+      }
+    } catch (e) {
+      statusEl.className = 'status error';
+      statusEl.innerText = e.message;
+      btn.textContent = 'Try Again';
+      btn.disabled = false;
+    }
+  });
+
+</script>
+
+</body>
+</html>
