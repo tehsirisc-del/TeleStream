@@ -36,7 +36,7 @@ public class UpdateCheckerPlugin extends Plugin {
 
     private static final String TAG = "UpdateCheckerPlugin";
     private static final String REPO_OWNER = "tehsirisc-del";
-    private static final String REPO_NAME = "stremio-gram";
+    private static final String REPO_NAME = "TeleStream";
 
     private ExecutorService executorService;
     private Handler mainHandler;
