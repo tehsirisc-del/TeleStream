@@ -1,0 +1,1614 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TeleStream</title>
+  <link rel="stylesheet" href="css/tv-style.css">
+  <!-- Libraries -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+  <script src="js/vendor/telegram.browser.js"></script>
+  <script src="js/config.js"></script>
+  <script src="js/vendor/dexie.min.js"></script>
+  <!-- App modules -->
+  <script src="js/database.js"></script>
+  <script src="js/telegram-client.js"></script>
+  <script src="js/indexer.js"></script>
+  <script src="js/streaming.js"></script>
+  <script src="js/spatial-nav.js"></script>
+</head>
+<body>
+
+<!-- Initial loading splash -->
+<div id="initial-loader" style="position:fixed;top:0;left:0;width:100%;height:100%;background:#0f172a;display:flex;align-items:center;justify-content:center;z-index:9999;flex-direction:column;gap:24px;">
+  <div id="loader-content" style="display:flex;flex-direction:column;align-items:center;gap:16px;">
+    <span class="spin" style="font-size:3rem;">⏳</span>
+    <div id="loader-text" style="font-size:1.5rem;">Connecting...</div>
+  </div>
+  <!-- Emergency Logout Button (Hidden initially, shown after 10s timeout) -->
+  <div id="emergency-logout-container" style="display:none; flex-direction:column; align-items:center; gap:12px; margin-top:20px;">
+    <p style="color:#94a3b8; font-size:0.9rem; text-align:center; max-width:400px; line-height:1.4;">
+      Is it stuck? This may happen if your account is temporarily restricted (Flood Ban) or your session has expired.
+    </p>
+    <button class="btn btn-danger focusable" id="emergency-logout-btn" tabindex="0" style="height:54px; padding:0 32px;">Logout / Switch Account</button>
+    <button class="btn btn-secondary focusable" onclick="window.location.reload()" tabindex="0" style="padding:0 32px;">Retry Now</button>
+  </div>
+</div>
+
+<!-- No Internet Overlay -->
+<div id="no-internet-overlay">
+  <div class="offline-icon">📡</div>
+  <h2 class="offline-title">אין חיבור לאינטרנט</h2>
+  <p class="offline-text">
+    נראה שהמכשיר אינו מחובר לרשת. אנא בדוק את הגדרות ה-Wi-Fi או חיבור הכבל בטלוויזיה שלך.
+  </p>
+  <button class="btn btn-primary focusable" id="retry-internet-btn" tabindex="0">נסה שוב</button>
+</div>
+
+<!-- Sync Overlay -->
+<div id="sync-overlay" style="display:none;position:fixed;inset:0;background:rgba(11,12,16,0.9);z-index:9998;flex-direction:column;align-items:center;justify-content:center;backdrop-filter:blur(10px);">
+  <span class="spin" style="font-size:4rem;margin-bottom:24px;">🔄</span>
+  <h2 style="font-size:2.5rem;margin-bottom:12px;font-weight:800;color:white;">Syncing Library...</h2>
+  <p id="sync-overlay-text" style="color:#94A3B8;font-size:1.2rem;">Downloading channels from Telegram</p>
+</div>
+
+<!-- ── Main App Shell ──────────────────────────────── -->
+<div id="app" style="display:none;">
+
+  <!-- Tab Bar -->
+  <div id="tab-bar" data-nav-zone="tabs">
+    <div class="tab-item active focusable" id="tab-catalog"   tabindex="0"><span class="tab-icon">📺</span> Catalog</div>
+    <div class="tab-item focusable"        id="tab-favorites" tabindex="0"><span class="tab-icon">❤️</span> Favorites</div>
+    <div class="tab-item focusable"        id="tab-sources"   tabindex="0"><span class="tab-icon">➕</span> Sources</div>
+    <div class="tab-item focusable"        id="tab-settings"  tabindex="0"><span class="tab-icon">⚙️</span> Settings</div>
+  </div>
+
+  <!-- Content Area -->
+  <div id="content-area" data-nav-zone="content">
+
+    <!-- ── CATALOG VIEW ────────────────────────────── -->
+    <div class="view active" id="view-catalog">
+      <!-- Continue Watching -->
+      <div id="continue-watching-section" style="display:none;">
+        <div class="section-title">Continue Watching</div>
+        <div class="row-container" id="cw-row"></div>
+      </div>
+      <!-- Breadcrumb -->
+      <div id="breadcrumb" data-nav-zone="breadcrumb">
+        <span class="breadcrumb-item focusable" id="bc-series" tabindex="0">Series</span>
+      </div>
+      <!-- Indexing Pill -->
+      <div id="indexing-pill"><span class="spin">⏳</span> <span id="pill-text">Indexing...</span></div>
+      <!-- Grid Row -->
+      <div class="row-container" id="catalog-row"></div>
+    </div>
+
+    <!-- ── FAVORITES VIEW ───────────────────────────── -->
+    <div class="view" id="view-favorites">
+      <div style="font-size:1.5rem;font-weight:700;margin-bottom:20px;">Your Favorites</div>
+      <div class="scrollable" id="favorites-content"></div>
+    </div>
+
+    <!-- ── SOURCES VIEW ─────────────────────────────── -->
+    <div class="view" id="view-sources">
+      <div style="font-size:1.5rem;font-weight:700;margin-bottom:20px;">Manage Sources</div>
+      <div style="display:flex;gap:12px;margin-bottom:16px;flex-wrap:wrap;">
+        <input type="text" id="source-name-input" class="styled-input" placeholder="Source Name (optional)" tabindex="0" style="flex:1;" readonly>
+        <div class="input-group" style="flex:2;">
+          <span class="input-prefix">https://t.me/</span>
+          <input type="text" id="source-link-input" class="styled-input" placeholder="ChannelID" tabindex="0" readonly>
+        </div>
+        <button class="btn btn-primary focusable" id="add-source-btn" tabindex="0">Add Source</button>
+      </div>
+      <button class="btn btn-primary focusable" id="share-phone-btn" tabindex="0"
+        style="background:#0ea5e9;margin-bottom:16px;width:100%;">
+        📱 Share Link from Phone
+      </button>
+      <div class="scrollable" id="source-list"></div>
+    </div>
+
+    <!-- ── SETTINGS VIEW ────────────────────────────── -->
+    <div class="view" id="view-settings">
+      <div style="font-size:1.5rem;font-weight:700;margin-bottom:20px;">Settings</div>
+      
+      <div class="settings-list">
+        <div class="settings-row focusable" tabindex="0">
+          <div class="settings-label">
+            <h4>Auto Next Episode</h4>
+            <p>Automatically play the next episode when current ends.</p>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="setting-auto-next" onchange="autoSaveSettings()">
+            <span class="slider"></span>
+          </label>
+        </div>
+
+        <div class="settings-row focusable" tabindex="0" id="countdown-row-wrapper">
+          <div class="settings-label" id="countdown-label">
+            <h4>Countdown Duration</h4>
+            <p>Wait time before auto-playing (seconds)</p>
+          </div>
+          <input type="number" id="setting-countdown" class="styled-input focusable" min="1" max="60" tabindex="0" style="width:100px; text-align:center; padding: 10px;" onchange="autoSaveSettings()" readonly>
+        </div>
+
+        <div class="settings-row focusable" tabindex="0" id="zoom-row" onclick="openZoomModal()">
+          <div class="settings-label">
+            <h4>Interface Zoom</h4>
+            <p>Adjust the overall size of the UI</p>
+          </div>
+          <div id="zoom-val" style="font-weight:700; color:var(--accent); font-size:1.1rem;" data-zoom="100">100%</div>
+        </div>
+
+        <div class="settings-row focusable" tabindex="0" id="setting-seek-step-row">
+          <div class="settings-label">
+            <h4>Seek Interval</h4>
+            <p>Seconds to skip forward/back with remote keys.</p>
+          </div>
+          <select id="setting-seek-step" class="styled-input focusable" tabindex="0" style="width:100px; background:#1e293b; color:white; border:none;" onchange="autoSaveSettings()">
+            <option value="5">5s</option>
+            <option value="10">10s</option>
+            <option value="15" selected>15s</option>
+            <option value="30">30s</option>
+            <option value="60">60s</option>
+          </select>
+        </div>
+
+        <div class="settings-row focusable" tabindex="0" id="update-row" onclick="if(window.AppUpdater) window.AppUpdater.checkForUpdatesManual()">
+          <div class="settings-label">
+            <h4>Check for Updates</h4>
+            <p id="update-status-text">Check if a new version is available on GitHub.</p>
+          </div>
+          <div id="update-badge" style="font-weight:700; color:#38bdf8; font-size:1.1rem; display:none;">New Available!</div>
+        </div>
+      </div>
+      
+      <div style="margin-top:40px; border-top:1px solid rgba(255,255,255,0.1); padding-top:20px;">
+        <button class="btn btn-danger focusable" id="logout-btn" tabindex="0" style="width:100%; display:flex; align-items:center; justify-content:center; gap:12px; height:60px; font-size:1.2rem;" onclick="handleLogout()">
+          <span>🚪</span> Logout from Telegram
+        </button>
+        <p style="text-align:center; color:#94a3b8; font-size:0.9rem; margin-top:12px;">
+          This will clear your session and all locally cached data.
+        </p>
+
+        <p style="text-align:center; color:#64748b; font-size:0.85rem; margin-top:40px; margin-bottom: 20px;">
+          App Version: <span id="app-version-display">v1.0.0</span>
+        </p>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- Debug Panel overlay -->
+<div id="debug-panel" style="display:none; position:fixed; top:10%; left:5%; width:45%; max-height:70vh; background:rgba(0,0,0,0.9); border:2px solid #ef4444; color:#22c55e; font-family:monospace; font-size:12px; padding:15px; border-radius:8px; z-index:10000; overflow-y:auto; overflow-x:hidden; pointer-events:auto; box-shadow:0 10px 30px rgba(0,0,0,1);">
+  <div style="font-weight:bold; color:#ef4444; margin-bottom:8px; display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #333; padding-bottom:5px;">
+    <span>⚡ LIVE STREAM DEBUGGER</span>
+    <button onclick="clearDebug()" style="background:#1e293b; color:#fff; border:1px solid #475569; border-radius:4px; padding:2px 8px; font-size:10px;">Clear</button>
+  </div>
+  <div id="debug-content" style="white-space:pre-wrap; word-break:break-all; line-height:1.4;">[System] Console initialized...</div>
+</div>
+
+<!-- ── Player UI (Hidden, but used for JS hooks) ──────────────────── -->
+<div id="player-modal" style="display:none; visibility:hidden; pointer-events:none;">
+  <video id="player-video" tabindex="-1" style="display:none;"></video>
+  <!-- Controls HUD -->
+  <div id="player-controls">
+    <div id="player-title-bar">Now Playing</div>
+    <div class="seek-bar-container">
+      <span class="time-display" id="time-current">0:00</span>
+      <input type="range" id="seek-bar" min="0" max="100" value="0" tabindex="0">
+      <span class="time-display" id="time-total">0:00</span>
+    </div>
+    <div class="player-btn-row">
+      <button class="player-ctrl-btn focusable" id="btn-rewind"   tabindex="0">⏪ -15s</button>
+      <button class="player-ctrl-btn focusable" id="btn-playpause" tabindex="0">⏸ Pause</button>
+      <button class="player-ctrl-btn focusable" id="btn-forward"  tabindex="0">+15s ⏩</button>
+      <button class="player-ctrl-btn focusable" id="btn-debug"    tabindex="0">🐞 Debug</button>
+      <button class="player-ctrl-btn focusable" id="btn-close-player" tabindex="0">✕ Close</button>
+    </div>
+  </div>
+
+  <!-- Debug & Progress Overlay -->
+  <div id="player-status-overlay" style="position:absolute;top:20px;left:20px;background:rgba(0,0,0,0.7);padding:10px 15px;border-radius:8px;color:#0ea5e9;font-family:monospace;font-size:0.9rem;z-index:100;pointer-events:none;display:none;">
+    <div id="status-mode">Mode: Initializing...</div>
+    <div id="status-progress" style="margin-top:4px;color:#94a3b8;">Waiting for data...</div>
+    <div id="status-error" style="margin-top:4px;color:#f43f5e;display:none;"></div>
+  </div>
+
+  <!-- Auto-Next Overlay -->
+  <div id="auto-next-overlay">
+    <h2>Next Episode in <span id="auto-next-countdown">15</span>s...</h2>
+    <div class="auto-next-btns">
+      <button class="btn btn-primary focusable" id="btn-play-next"   tabindex="0">▶ Play Now</button>
+      <button class="btn btn-secondary focusable" id="btn-cancel-next" tabindex="0">✕ Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Add Source Modal ───────────────────────────────── -->
+<div id="add-source-modal" class="modal-overlay">
+  <div class="modal-box" style="text-align:center;">
+    <h2>Source Configuration</h2>
+    <p>Does this Telegram channel contain a <b>single</b> TV series, or <b>multiple</b> different series?</p>
+    <div class="modal-btns" style="justify-content:center;gap:16px;">
+      <button class="btn btn-primary focusable"   id="btn-single-series" tabindex="0">Single Series</button>
+      <button class="btn btn-secondary focusable" id="btn-multi-series"  tabindex="0">Multiple</button>
+    </div>
+    <button class="btn btn-secondary focusable" id="cancel-source-modal" tabindex="0" style="width:100%;margin-top:12px;">Cancel</button>
+  </div>
+</div>
+
+<!-- ── Assign Episode Modal ───────────────────────────── -->
+<div id="assign-modal" class="modal-overlay">
+  <div class="modal-box" style="text-align:center;">
+    <h2>Manual Assignment</h2>
+    <p>Set the target Season and Episode numbers for this video.</p>
+    <div style="text-align:left;margin-bottom:14px;">
+      <label style="color:var(--text-secondary);font-size:0.85rem;display:block;margin-bottom:6px;">Season Number</label>
+      <input type="number" id="assign-season" class="styled-input" placeholder="e.g. 1" tabindex="0" readonly>
+    </div>
+    <div style="text-align:left;margin-bottom:20px;">
+      <label style="color:var(--text-secondary);font-size:0.85rem;display:block;margin-bottom:6px;">Episode Number</label>
+      <input type="number" id="assign-episode" class="styled-input" placeholder="e.g. 5" tabindex="0" readonly>
+    </div>
+    <div class="modal-btns" style="justify-content:center;">
+      <button class="btn btn-primary focusable"   id="btn-submit-assign" tabindex="0">Assign</button>
+      <button class="btn btn-secondary focusable" id="btn-cancel-assign" tabindex="0">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Share Modal (QR) ───────────────────────────────── -->
+<div id="share-modal" class="modal-overlay">
+  <div class="modal-box" style="text-align:center;">
+    <h2>📱 Scan to Share</h2>
+    <p>Scan this QR code with your phone. Any link you share will appear here automatically.</p>
+    <p style="color:#f43f5e; font-size:0.85rem; margin-bottom:12px;">⚠️ רק מכשירים המחוברים לאותה רשת Wi-Fi של הטלוויזיה יוכלו לגשת ללינק.</p>
+    <div id="share-qr-container" style="background:#fff;padding:16px;display:inline-block;border-radius:10px;margin:0 auto 20px auto;"></div>
+    <button class="btn btn-secondary focusable" id="close-share-modal" tabindex="0" style="width:100%;">Close</button>
+  </div>
+</div>
+
+<!-- ── Confirm Modal ──────────────────────────────────── -->
+<div id="confirm-modal" class="modal-overlay">
+  <div class="modal-box">
+    <h2 id="confirm-title">Are you sure?</h2>
+    <p id="confirm-msg"></p>
+    <div class="modal-btns">
+      <button class="btn btn-secondary focusable" id="confirm-cancel" tabindex="0">Cancel</button>
+      <button class="btn btn-primary focusable"   id="confirm-ok"     tabindex="0">Confirm</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Zoom Menu Modal ────────────────────────────────── -->
+<div id="zoom-modal" class="modal-overlay">
+  <div class="modal-box" style="width: 340px; text-align:center; padding: 24px;">
+    <h2 style="margin-bottom: 20px;">Interface Zoom</h2>
+    <div id="zoom-list" class="scrollable" style="display:flex; flex-direction:column; gap:8px; max-height:60vh; margin-bottom: 20px;"></div>
+    <button class="btn btn-secondary focusable" onclick="closeModal('zoom-modal')" tabindex="0" style="width:100%;">Close</button>
+  </div>
+</div>
+
+<!-- ── Toast Container ────────────────────────────────── -->
+<div id="toast-container"></div>
+
+<!-- ─────────────────── MAIN APP SCRIPT ─────────────────────────────── -->
+<script>
+// ── State ───────────────────────────────────────────────────────────────
+let currentView = 'catalog';
+let catalogView = 'series';  // series | seasons | episodes
+let currentSeries = null;
+let currentSeason = null;
+let currentPlayingEp = null;
+let currentSettings = { auto_next_enabled: 1, auto_next_countdown: 15, seek_step: 15 };
+let autoNextActive = false;
+let autoNextTimer = null;
+let progressDebounce = null;
+let indexPollInterval = null;
+let userId = null;
+let shareQrGenerated = false;
+let shareSseSource = null;
+let controlsHideTimer = null;
+
+// ── Utilities ────────────────────────────────────────────────────────────
+
+function showToast(msg, type = 'info') {
+  const c = document.getElementById('toast-container');
+  const t = document.createElement('div');
+  t.className = `toast ${type}`;
+  const icon = type === 'success' ? '✓' : type === 'error' ? '⚠' : 'ℹ';
+  t.innerHTML = `<span>${icon}</span><span>${msg}</span>`;
+  c.appendChild(t);
+  setTimeout(() => { t.classList.add('hiding'); setTimeout(() => t.remove(), 400); }, 4000);
+}
+
+function showConfirm(msg, title = 'Confirm', isDanger = false) {
+  return new Promise(resolve => {
+    const modal = document.getElementById('confirm-modal');
+    document.getElementById('confirm-title').textContent = title;
+    document.getElementById('confirm-msg').textContent = msg;
+    const okBtn = document.getElementById('confirm-ok');
+    okBtn.className = isDanger ? 'btn btn-danger focusable' : 'btn btn-primary focusable';
+    modal.classList.add('open');
+    const cleanup = val => {
+      modal.classList.remove('open');
+      okBtn.onclick = null;
+      document.getElementById('confirm-cancel').onclick = null;
+      resolve(val);
+    };
+    okBtn.onclick = () => cleanup(true);
+    document.getElementById('confirm-cancel').onclick = () => cleanup(false);
+    okBtn.focus();
+  });
+}
+
+function openModal(id) { 
+  document.getElementById(id).classList.add('open'); 
+  document.getElementById('app').inert = true;
+}
+function closeModal(id) { 
+  document.getElementById(id).classList.remove('open'); 
+  // Only remove inert if no other modals are open
+  if (!document.querySelector('.modal-overlay.open')) {
+    document.getElementById('app').inert = false;
+  }
+}
+
+function formatTime(s) {
+  if (!s || isNaN(s)) return '0:00';
+  const m = Math.floor(s / 60);
+  const sc = Math.floor(s % 60);
+  return `${m}:${sc < 10 ? '0' : ''}${sc}`;
+}
+
+function updateOnlineStatus() {
+  const overlay = document.getElementById('no-internet-overlay');
+  if (navigator.onLine) {
+    if (overlay.classList.contains('visible')) {
+      overlay.classList.remove('visible');
+      // If we were stuck at start, restart startApp
+      if (!userId) startApp();
+    }
+  } else {
+    overlay.classList.add('visible');
+  }
+}
+
+// ── Navigation ────────────────────────────────────────────────────────────
+
+// ── UI Helpers ──────────────────────────────────────────────────────────
+
+function cleanupFavBar() {
+  const bar = document.querySelector('.fav-bar-container');
+  if (bar) bar.remove();
+}
+
+function showTab(view) {
+  if (currentView === view) return;
+  cleanupFavBar();
+  currentView = view;
+  ['catalog','favorites','sources','settings'].forEach(v => {
+    const el = document.getElementById(`view-${v}`);
+    const tab = document.getElementById(`tab-${v}`);
+    el.classList.toggle('active', v === view);
+    tab.classList.toggle('active', v === view);
+  });
+  if (view === 'catalog')   { loadCatalogSeries(); loadContinueWatching(); startIndexPoll(); }
+  if (view === 'favorites') loadFavorites();
+  if (view === 'sources')   { loadSources(); startIndexPoll(); }
+  if (view === 'settings')  loadSettings();
+}
+
+function handleBack() {
+  // Check open modals first
+  const modals = ['add-source-modal','assign-modal','share-modal','confirm-modal'];
+  for (const m of modals) {
+    if (document.getElementById(m).classList.contains('open')) {
+      closeModal(m);
+      return;
+    }
+  }
+  // Player
+  if (document.getElementById('player-modal').classList.contains('open')) {
+    closePlayer();
+    return;
+  }
+  // Catalog breadcrumb
+  if (currentView === 'catalog') {
+    if (catalogView === 'episodes') { loadSeasons(currentSeries); return; }
+    if (catalogView === 'seasons')  { loadCatalogSeries(); return; }
+  }
+  
+  // If at root, exit app
+  if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.App) {
+    window.Capacitor.Plugins.App.exitApp();
+  }
+}
+
+SpatialNav.init(handleBack);
+
+// ── Tabs ──────────────────────────────────────────────────────────────────
+
+['catalog','favorites','sources','settings'].forEach(v => {
+  const tab = document.getElementById(`tab-${v}`);
+  tab.onclick = () => showTab(v);
+  tab.onfocus = () => showTab(v);
+});
+
+// ── Breadcrumb ────────────────────────────────────────────────────────────
+
+function updateBreadcrumb() {
+  const bc = document.getElementById('breadcrumb');
+  let html = `<span class="breadcrumb-item focusable" id="bc-series" tabindex="0">Series</span>`;
+  if (catalogView === 'seasons' || catalogView === 'episodes') {
+    html += `<span class="breadcrumb-sep">/</span>
+             <span class="breadcrumb-item focusable" tabindex="0" id="bc-series-name">${currentSeries.title}</span>`;
+  }
+  if (catalogView === 'episodes') {
+    const sName = currentSeason.seasonNumber === 0 ? 'Unrecognized Episodes' : `Season ${currentSeason.seasonNumber}`;
+    html += `<span class="breadcrumb-sep">/</span><span class="breadcrumb-item">${sName}</span>`;
+  }
+  bc.innerHTML = html;
+  document.getElementById('bc-series').onclick = loadCatalogSeries;
+  const bcName = document.getElementById('bc-series-name');
+  if (bcName) bcName.onclick = () => loadSeasons(currentSeries);
+}
+
+// ── Continue Watching ─────────────────────────────────────────────────────
+
+async function loadContinueWatching() {
+  try {
+    let data = await window.DB.getContinueWatching(userId);
+    if (catalogView === 'seasons' || catalogView === 'episodes') {
+      if (currentSeries) data = data.filter(e => e.series_id === currentSeries.id);
+    }
+    const sec = document.getElementById('continue-watching-section');
+    const row = document.getElementById('cw-row');
+    if (data.length === 0) { sec.style.display = 'none'; return; }
+    sec.style.display = 'block';
+    row.innerHTML = '';
+    data.forEach(e => {
+      // Use discovered real duration (progress_duration) if Telegram metadata (duration) is 0
+      const d = (e.progress_duration > 60) ? e.progress_duration : (e.duration || 1);
+      const pct = Math.min(100, (e.progress_seconds / d) * 100);
+      const card = document.createElement('div');
+      card.className = 'card episode-card focusable';
+      card.tabIndex = 0;
+      card.innerHTML = `
+        <button onclick="event.stopPropagation();removeCW(${e.id})"
+          style="position:absolute;top:8px;right:8px;background:rgba(15,23,42,0.8);border:none;color:#94a3b8;
+                 width:28px;height:28px;border-radius:50%;font-size:1rem;cursor:pointer;z-index:20;
+                 display:flex;align-items:center;justify-content:center;" tabindex="0">×</button>
+        <div style="width:100%">
+          <h4>${e.series_title} — E${e.episodeNumber}</h4>
+          <p>${e.title}</p>
+          <div class="progress-bar"><div class="progress-fill" style="width:${pct}%"></div></div>
+        </div>`;
+      card.onclick = () => playEpisode(e);
+      row.appendChild(card);
+    });
+  } catch(ex) { console.error(ex); }
+}
+
+async function removeCW(episodeId) {
+  const ok = await showConfirm('Remove from Continue Watching?', 'Remove Item');
+  if (!ok) return;
+  await window.DB.deleteProgress(userId, episodeId);
+  loadContinueWatching();
+}
+
+// ── Catalog: Series ───────────────────────────────────────────────────────
+
+async function loadCatalogSeries() {
+  cleanupFavBar();
+  catalogView = 'series';
+  currentSeries = null;
+  currentSeason = null;
+  updateBreadcrumb();
+  loadContinueWatching();
+
+  const row = document.getElementById('catalog-row');
+  row.innerHTML = '';
+
+  // Placeholders
+  for (let i = 0; i < 8; i++) {
+    const ph = document.createElement('div');
+    ph.className = 'placeholder-card series-card';
+    row.appendChild(ph);
+  }
+
+  try {
+    const seriesList = await window.DB.getAllSeries(userId);
+    const favs = new Set((await window.DB.getFavorites(userId)).filter(f => f.itemType === 'series').map(f => f.itemId));
+    row.innerHTML = '';
+
+    if (seriesList.length === 0) {
+      row.innerHTML = '<p class="empty-msg">No series found. Add a Telegram source in the Sources tab.</p>';
+      return;
+    }
+
+    seriesList.forEach(s => {
+      const isFav = favs.has(s.id);
+      const card = document.createElement('div');
+      card.className = 'card series-card focusable';
+      card.tabIndex = 0;
+      const avatarHtml = s.source_photo
+        ? `<img class="card-avatar" src="${s.source_photo}" loading="lazy">`
+        : `<div class="card-avatar-placeholder">${(s.title || '?')[0]}</div>`;
+      
+      const badgeHtml = isFav ? `<div style="position:absolute;top:10px;right:10px;font-size:1.2rem;z-index:2;filter:drop-shadow(0 2px 4px rgba(0,0,0,0.8));">❤️</div>` : '';
+      
+      card.innerHTML = `
+        <div class="card-overlay"></div>
+        ${badgeHtml}
+        <div class="card-body">${avatarHtml}<h3>${s.title}</h3></div>`;
+      card.onclick = () => loadSeasons(s);
+      row.appendChild(card);
+    });
+
+    if (row.firstElementChild) row.firstElementChild.focus();
+  } catch(e) { console.error(e); }
+}
+
+// ── Catalog: Seasons ──────────────────────────────────────────────────────
+
+async function loadSeasons(series) {
+  catalogView = 'seasons';
+  currentSeries = series;
+  updateBreadcrumb();
+  loadContinueWatching();
+
+  const row = document.getElementById('catalog-row');
+  row.innerHTML = '';
+  for (let i = 0; i < 4; i++) {
+    const ph = document.createElement('div');
+    ph.className = 'placeholder-card season-card';
+    row.appendChild(ph);
+  }
+
+  try {
+    const seasons = await window.DB.getSeasonsBySeriesId(series.id);
+    const favs = new Set((await window.DB.getFavorites(userId)).filter(f => f.itemType === 'series').map(f => f.itemId));
+    const isFav = favs.has(series.id);
+    
+    row.innerHTML = '';
+    
+    // Clean up any previously added fav button from previous view
+    if (row.previousElementSibling && row.previousElementSibling.classList.contains('fav-bar-container')) {
+      row.previousElementSibling.remove();
+    }
+    
+    // Add Favorite button
+    const favBar = document.createElement('div');
+    favBar.className = 'fav-bar-container';
+    favBar.style.width = '100%';
+    favBar.style.marginBottom = '20px';
+    favBar.innerHTML = `<button class="btn btn-secondary focusable" tabindex="0" onclick="toggleFav('series',${series.id},${isFav})">
+      ${isFav ? '❤️ Remove from Favorites' : '🤍 Add to Favorites'}
+    </button>`;
+    row.parentElement.insertBefore(favBar, row);
+
+    seasons.forEach(s => {
+      if (s.seasonNumber === 0 && s.episode_count === 0) return;
+      const card = document.createElement('div');
+      card.className = 'card season-card focusable';
+      card.tabIndex = 0;
+      card.innerHTML = `<h3>${s.seasonNumber === 0 ? 'Unrecognized Episodes' : 'Season ' + s.seasonNumber}</h3>`;
+      card.onclick = () => loadSeasons(s); // Wait, this should loadEpisodes! But it was loadEpisodes originally. Let me just rewrite it.
+      card.onclick = () => loadEpisodes(s);
+      row.appendChild(card);
+    });
+    
+    const oldFavBar = row.parentElement.querySelector('.btn-secondary.focusable');
+    if (favBar.previousSibling && favBar.previousSibling.tagName === 'DIV') {
+        // Clean up any previously added fav button from previous view
+    }
+
+    if (favBar) favBar.firstElementChild.focus();
+    else if (row.firstElementChild) row.firstElementChild.focus();
+  } catch(e) { console.error(e); }
+}
+
+// ── Catalog: Episodes ─────────────────────────────────────────────────────
+
+async function loadEpisodes(season) {
+  cleanupFavBar();
+  catalogView = 'episodes';
+  currentSeason = season;
+  updateBreadcrumb();
+  loadContinueWatching();
+
+  const row = document.getElementById('catalog-row');
+  row.innerHTML = '';
+  for (let i = 0; i < 6; i++) {
+    const ph = document.createElement('div');
+    ph.className = 'placeholder-card episode-card';
+    row.appendChild(ph);
+  }
+
+  try {
+    const episodes = await window.DB.getEpisodesBySeasonId(season.id, userId);
+    row.innerHTML = '';
+
+    // Auto-sort bar for season 0
+    if (season.seasonNumber === 0) {
+      const bar = document.createElement('div');
+      bar.className = 'auto-sort-bar';
+      bar.innerHTML = `
+        <div style="flex:1">
+          <p>Auto-Sort Unrecognized Episodes</p>
+          <p>Infer season placement from surrounding known episodes.</p>
+        </div>
+        <button class="btn btn-primary focusable" id="auto-sort-btn" tabindex="0">✨ Auto-Sort</button>`;
+      row.parentElement.insertBefore(bar, row);
+      document.getElementById('auto-sort-btn').onclick = doAutoSort;
+    } else {
+      const existing = row.parentElement.querySelector('.auto-sort-bar');
+      if (existing) existing.remove();
+    }
+
+    episodes.forEach(e => {
+      const card = document.createElement('div');
+      card.className = 'card episode-card focusable';
+      card.tabIndex = 0;
+      const mbSize = ((e.size || 0) / (1024 * 1024)).toFixed(1);
+      
+      const d = (e.progress_duration > 60) ? e.progress_duration : (e.duration || 0);
+      const pct = d > 0 ? Math.min(100, ((e.progress_seconds || 0) / d) * 100) : 0;
+      
+      const pbHtml = (e.progress_seconds > 0 && !e.is_watched)
+        ? `<div class="progress-bar"><div class="progress-fill" style="width:${pct}%"></div></div>
+           <span style="font-size:0.75rem;color:#94a3b8">${d > 0 ? (formatTime(Math.max(0, d - e.progress_seconds)) + ' left') : ''}</span>`
+        : '';
+      const watchedBadge = e.is_watched ? `<span class="watched-badge">✅ Watched</span>` : '';
+      const manualBadge  = e.is_manual  ? `<span class="manual-badge">Manual ✏️</span>` : '';
+      const isSeason0    = season.seasonNumber === 0;
+      const assignBtn    = (isSeason0 && !e.is_manual)
+        ? `<button onclick="event.stopPropagation();promptAssign(${e.id})" class="btn btn-primary focusable" tabindex="0" style="padding:6px 14px;font-size:0.8rem;">Assign ✏️</button>`
+        : '';
+      const undoBtn = e.is_manual
+        ? `<button onclick="event.stopPropagation();undoAssign(${e.id})" class="btn btn-secondary focusable" tabindex="0" style="padding:6px 14px;font-size:0.8rem;">Undo</button>`
+        : '';
+      const isFav = e.is_favorite;
+      card.innerHTML = `
+        <button class="fav-btn focusable" tabindex="0"
+          onclick="event.stopPropagation();toggleFav('episode',${e.id},${isFav})">${isFav ? '❤️' : '🤍'}</button>
+        <h4>Episode ${e.episodeNumber} ${manualBadge} ${watchedBadge}</h4>
+        <p title="${e.title}">${e.title}</p>
+        <div class="episode-meta">${mbSize} MB${((e.progress_duration > 60) ? ' | ' + formatTime(e.progress_duration) : (e.duration > 60 ? ' | ' + formatTime(e.duration) : ''))}</div>
+        ${pbHtml}
+        <div style="display:flex;gap:8px;margin-top:10px;">${assignBtn}${undoBtn}</div>`;
+      const clickArea = card;
+      card.onclick = (ev) => {
+        // Only ignore if clicking a button inside (fav/assign), otherwise play
+        if (ev.target.closest('.fav-btn') || ev.target.closest('.btn')) return;
+        playEpisode(e);
+      };
+      row.appendChild(card);
+    });
+    if (row.firstElementChild) row.firstElementChild.focus();
+  } catch(e) { console.error(e); }
+}
+
+// ── Favorites ──────────────────────────────────────────────────────────────
+
+async function loadFavorites() {
+  const cont = document.getElementById('favorites-content');
+  cont.innerHTML = '<p class="empty-msg">Loading...</p>';
+  try {
+    const data = await window.DB.getFavoritesDetails(userId);
+    cont.innerHTML = '';
+
+    if (data.series.length === 0 && data.episodes.length === 0) {
+      cont.innerHTML = '<p class="empty-msg">No favorites yet.</p>';
+      return;
+    }
+
+    if (data.series.length > 0) {
+      const h = document.createElement('div');
+      h.className = 'section-title';
+      h.textContent = 'Series';
+      cont.appendChild(h);
+      const row = document.createElement('div');
+      row.className = 'row-container';
+      data.series.forEach(s => {
+        const card = document.createElement('div');
+        card.className = 'card series-card focusable';
+        card.tabIndex = 0;
+        const avatarHtml = s.source_photo
+          ? `<img class="card-avatar" src="${s.source_photo}" loading="lazy">`
+          : `<div class="card-avatar-placeholder">${(s.title||'?')[0]}</div>`;
+        card.innerHTML = `
+          <div class="card-overlay"></div>
+          <button class="fav-btn focusable" tabindex="0"
+            onclick="event.stopPropagation();toggleFav('series',${s.id},true)">❤️</button>
+          <div class="card-body">${avatarHtml}<h3>${s.title}</h3></div>`;
+        card.onclick = () => { showTab('catalog'); loadSeasons(s); };
+        row.appendChild(card);
+      });
+      cont.appendChild(row);
+    }
+
+    if (data.episodes.length > 0) {
+      const h = document.createElement('div');
+      h.className = 'section-title';
+      h.style.marginTop = '20px';
+      h.textContent = 'Episodes';
+      cont.appendChild(h);
+      const row = document.createElement('div');
+      row.className = 'row-container';
+      data.episodes.forEach(ep => {
+        const card = document.createElement('div');
+        card.className = 'card episode-card focusable';
+        card.tabIndex = 0;
+        card.innerHTML = `
+          <button class="fav-btn focusable" tabindex="0"
+            onclick="event.stopPropagation();toggleFav('episode',${ep.id},true)">❤️</button>
+          <h4>${ep.series_title} — S${ep.season_number} E${ep.episodeNumber}</h4>
+          <p>${ep.title}</p>`;
+        card.onclick = () => playEpisode(ep);
+        row.appendChild(card);
+      });
+      cont.appendChild(row);
+    }
+  } catch(e) { console.error(e); }
+}
+
+// ── Favorites Toggle ───────────────────────────────────────────────────────
+
+async function toggleFav(type, id, currentState) {
+  if (currentState) await window.DB.removeFavorite(userId, type, id);
+  else await window.DB.addFavorite(userId, type, id);
+  // Refresh current view
+  if (currentView === 'catalog') {
+    if (catalogView === 'series')   loadCatalogSeries();
+    else if (catalogView === 'seasons') loadSeasons(currentSeries);
+    else loadEpisodes(currentSeason);
+  } else if (currentView === 'favorites') {
+    loadFavorites();
+  }
+}
+
+// ── Sources ────────────────────────────────────────────────────────────────
+
+let pendingSourceName = '';
+let pendingSourceLink = '';
+
+document.getElementById('add-source-btn').onclick = () => {
+  pendingSourceName = document.getElementById('source-name-input').value.trim();
+  let rawLink = document.getElementById('source-link-input').value.trim();
+  if (!rawLink) { showToast('Link is required', 'error'); return; }
+  
+  // Combine prefix if user just entered ID, or clean up if they entered full URL
+  if (rawLink.startsWith('http://') || rawLink.startsWith('https://')) {
+    pendingSourceLink = rawLink;
+  } else {
+    // Trim accidental leading /
+    if (rawLink.startsWith('/')) rawLink = rawLink.substring(1);
+    pendingSourceLink = 'https://t.me/' + rawLink;
+  }
+  
+  openModal('add-source-modal');
+  document.getElementById('btn-single-series').focus();
+};
+
+document.getElementById('btn-single-series').onclick  = () => submitSource(true);
+document.getElementById('btn-multi-series').onclick   = () => submitSource(false);
+document.getElementById('cancel-source-modal').onclick = () => closeModal('add-source-modal');
+
+async function submitSource(isSingleSeries) {
+  closeModal('add-source-modal');
+  const btn = document.getElementById('add-source-btn');
+  btn.disabled = true;
+  btn.textContent = 'Adding...';
+  try {
+    let name = pendingSourceName;
+    if (!name) {
+      const { channelArg } = await window.TGClient.resolveChannelFromLink(pendingSourceLink);
+      const entity = await window.TGClient.getEntity(channelArg);
+      name = entity.title || entity.username || 'Telegram Channel';
+    }
+    const id = await window.DB.addSource(name, pendingSourceLink, isSingleSeries, userId);
+    const source = await window.DB.getSourceById(id);
+    window.AppIndexer.indexSource(source);
+    await window.TGClient.syncSourcesToTelegram(userId);
+    document.getElementById('source-name-input').value = '';
+    document.getElementById('source-link-input').value = '';
+    await loadSources();
+    startIndexPoll(true);
+    showToast('Source added and indexing started!', 'success');
+  } catch(e) {
+    showToast(e.message, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Add Source';
+  }
+}
+
+async function loadSources() {
+  const list = document.getElementById('source-list');
+  list.innerHTML = '';
+  try {
+    const sources = await window.DB.getSources(userId);
+    sources.forEach(s => {
+      const st = window.AppIndexer.getState(s.id);
+      const badgeIcon = { idle:'○', queued:'⏲', indexing:'⏳', done:'✓', error:'⚠' }[st.status] || '○';
+      const badgeLabel = st.status === 'indexing' ? `Indexing… (${st.processed})` :
+        st.status === 'queued' ? 'Queued' : st.status === 'done' ? 'Done' :
+        st.status === 'error'  ? 'Error' : 'Idle';
+      const row = document.createElement('div');
+      row.className = 'source-row focusable';
+      row.tabIndex = 0;
+      row.id = `source-row-${s.id}`;
+      row.innerHTML = `
+        <div class="source-info">
+          <div class="source-name">${s.name}</div>
+          <div class="source-link">${s.link}</div>
+        </div>
+        <div class="source-row-actions">
+          <span class="status-badge ${st.status}" id="badge-${s.id}">${badgeIcon} ${badgeLabel}</span>
+          <button class="btn btn-secondary focusable" tabindex="0" onclick="refreshSource(${s.id})">Refresh</button>
+          <button class="btn btn-danger   focusable" tabindex="0" onclick="deleteSource(${s.id})">Delete</button>
+        </div>`;
+      list.appendChild(row);
+    });
+  } catch(e) { console.error(e); }
+}
+
+async function refreshSource(id) {
+  const badge = document.getElementById(`badge-${id}`);
+  if (badge) { badge.className = 'status-badge indexing'; badge.textContent = '⏳ Starting…'; }
+  const source = await window.DB.getSourceById(id);
+  if (source) { window.AppIndexer.indexSource(source); startIndexPoll(true); }
+}
+
+async function deleteSource(id) {
+  const ok = await showConfirm('Delete this source and all its indexed content?', 'Delete Source', true);
+  if (!ok) return;
+  await window.DB.deleteSource(id);
+  await window.TGClient.syncSourcesToTelegram(userId);
+  loadSources();
+  showToast('Source deleted', 'success');
+}
+
+// ── Indexer progress → badge updates ──────────────────────────────────────
+
+window.AppIndexer.onProgress = (sourceId, state) => {
+  const badge = document.getElementById(`badge-${sourceId}`);
+  if (badge) {
+    const badgeIcon = { idle:'○', queued:'⏲', indexing:'⏳', done:'✓', error:'⚠' }[state.status] || '○';
+    const badgeLabel = state.status === 'indexing' ? `Indexing… (${state.processed})` :
+      state.status === 'queued' ? 'Queued' : state.status === 'done' ? 'Done' :
+      state.status === 'error'  ? 'Error' : 'Idle';
+    badge.className = `status-badge ${state.status}`;
+    badge.textContent = `${badgeIcon} ${badgeLabel}`;
+  }
+
+  // Update indexing pill & overlay
+  const anyIndexing = [...window.AppIndexer.states.values()].some(s => s.status === 'indexing' || s.status === 'queued');
+  const pill = document.getElementById('indexing-pill');
+  if (pill) pill.classList.toggle('active', anyIndexing);
+  
+  const overlay = document.getElementById('sync-overlay');
+  if (overlay && overlay.style.display === 'flex') {
+    const activeStates = [...window.AppIndexer.states.values()].filter(s => s.status === 'indexing');
+    if (activeStates.length > 0) {
+       document.getElementById('sync-overlay-text').textContent = `Processing items: ${activeStates.reduce((acc, s) => acc + s.processed, 0)}... / Do not close the app.`;
+    }
+    if (!anyIndexing) {
+       overlay.style.display = 'none';
+       if (currentView === 'catalog' && catalogView === 'series') loadCatalogSeries();
+    }
+  }
+
+  // Refresh catalog when done naturally
+  if (state.status === 'done' && currentView === 'catalog' && catalogView === 'series' && (!overlay || overlay.style.display !== 'flex')) {
+    loadCatalogSeries();
+  }
+};
+
+function startIndexPoll(force = false) {
+  if (force) { clearInterval(indexPollInterval); indexPollInterval = null; }
+  if (indexPollInterval) return;
+  indexPollInterval = setInterval(() => {
+    const anyActive = [...window.AppIndexer.states.values()].some(s => s.status === 'indexing' || s.status === 'queued');
+    if (!anyActive && currentView !== 'sources') {
+      clearInterval(indexPollInterval);
+      indexPollInterval = null;
+    }
+  }, 2000);
+}
+
+// ── Settings ───────────────────────────────────────────────────────────────
+
+const zoomLevels = { small: '14px', normal: '18px', large: '22px' };
+
+async function loadSettings() {
+  try {
+    const s = await window.DB.getUserSettings(userId);
+    currentSettings = s;
+    const chk = document.getElementById('setting-auto-next');
+    chk.checked = (s.auto_next_enabled === 1);
+    
+    // Grey out logic
+    const cdRow = document.getElementById('countdown-row-wrapper');
+    const cn = document.getElementById('setting-countdown');
+    cn.value = s.auto_next_countdown;
+    
+    if (chk.checked) {
+      cdRow.style.opacity = '1'; cdRow.style.pointerEvents = 'auto'; cn.tabIndex = 0;
+    } else {
+      cdRow.style.opacity = '0.4'; cdRow.style.pointerEvents = 'none'; cn.tabIndex = -1;
+    }
+
+    // Load Zoom
+    const zoom = s.ui_zoom ? parseInt(s.ui_zoom) : 100;
+    document.documentElement.style.fontSize = (18 * (zoom / 100)) + 'px';
+    const zoomEl = document.getElementById('zoom-val');
+    zoomEl.dataset.zoom = zoom;
+    zoomEl.textContent = zoom + '%';
+
+    // Load Seek Step
+    if (s.seek_step) {
+      document.getElementById('setting-seek-step').value = s.seek_step;
+      document.getElementById('btn-rewind').textContent = `⏪ -${s.seek_step}s`;
+      document.getElementById('btn-forward').textContent = `+${s.seek_step}s ⏩`;
+    }
+  } catch(e) {}
+}
+
+async function autoSaveSettings() {
+  const chk = document.getElementById('setting-auto-next').checked;
+  const cn = document.getElementById('setting-countdown');
+  const cdRow = document.getElementById('countdown-row-wrapper');
+  
+  // Grey out logic
+  if (chk) {
+    cdRow.style.opacity = '1';
+    cdRow.style.pointerEvents = 'auto';
+    cn.tabIndex = 0;
+  } else {
+    cdRow.style.opacity = '0.4';
+    cdRow.style.pointerEvents = 'none';
+    cn.tabIndex = -1;
+  }
+  
+  const autoNext = chk ? 1 : 0;
+  const countdown = parseInt(cn.value) || 15;
+  const uiZoom = parseInt(document.getElementById('zoom-val').dataset.zoom) || 100;
+  const seekStep = parseInt(document.getElementById('setting-seek-step').value) || 15;
+
+  await window.DB.updateUserSettings(userId, autoNext, countdown, uiZoom, seekStep);
+  currentSettings = { auto_next_enabled: autoNext, auto_next_countdown: countdown, ui_zoom: uiZoom, seek_step: seekStep };
+  
+  // Update player buttons
+  document.getElementById('btn-rewind').textContent = `⏪ -${seekStep}s`;
+  document.getElementById('btn-forward').textContent = `+${seekStep}s ⏩`;
+}
+
+function openZoomModal() {
+  const container = document.getElementById('zoom-list');
+  container.innerHTML = '';
+  const current = parseInt(document.getElementById('zoom-val').dataset.zoom) || 100;
+  
+  for (let z = 80; z <= 150; z += 5) {
+    const btn = document.createElement('button');
+    btn.className = 'btn btn-secondary focusable';
+    if (z === current) {
+      btn.style.borderColor = 'var(--accent)';
+      btn.style.color = 'var(--accent)';
+    }
+    btn.textContent = z + '%';
+    btn.tabIndex = 0;
+    btn.onclick = () => {
+      setZoom(z);
+      closeModal('zoom-modal');
+    };
+    container.appendChild(btn);
+  }
+  openModal('zoom-modal');
+  container.querySelector('button').focus();
+}
+
+function setZoom(val) {
+  const el = document.getElementById('zoom-val');
+  el.dataset.zoom = val;
+  el.textContent = val + '%';
+  document.documentElement.style.fontSize = (18 * (val / 100)) + 'px';
+  autoSaveSettings();
+}
+
+async function handleLogout() {
+  const ok = await showConfirm(
+    'Are you sure you want to log out? This will clear all your sources, favorites, and settings.',
+    'Confirm Logout',
+    true // isDanger
+  );
+  if (!ok) return;
+
+  try {
+    // 1. Loader
+    document.getElementById('initial-loader').style.display = 'flex';
+    document.getElementById('initial-loader').querySelector('div').textContent = 'Logging out...';
+    
+    // 2. Clear TG
+    await window.TGClient.logout();
+    
+    // 3. Clear DB
+    await window.DB.clearAllData();
+    
+    // 4. Clear LocalStorage
+    localStorage.clear();
+    
+    // 5. Redirect
+    window.location.replace('login.html');
+  } catch(e) {
+    showToast('Logout failed: ' + e.message, 'error');
+    document.getElementById('initial-loader').style.display = 'none';
+  }
+}
+
+// Handle setting row clicks for D-pad toggling
+document.querySelectorAll('.settings-row').forEach(row => {
+  row.addEventListener('click', (e) => {
+    // Prevent double-click if button itself was clicked (not applicable to the label but good practice)
+    if (e.target.tagName === 'INPUT' || row.id === 'zoom-row') return;
+    const input = row.querySelector('input[type="checkbox"]');
+    if (input) {
+      input.checked = !input.checked;
+      autoSaveSettings();
+    }
+  });
+});
+
+// ── Episode Assignment ─────────────────────────────────────────────────────
+
+let assignEpisodeId = null;
+
+function promptAssign(episodeId) {
+  assignEpisodeId = episodeId;
+  document.getElementById('assign-season').value = '';
+  document.getElementById('assign-episode').value = '';
+  openModal('assign-modal');
+  document.getElementById('assign-season').focus();
+}
+
+document.getElementById('btn-submit-assign').onclick = async () => {
+  const sn = parseInt(document.getElementById('assign-season').value);
+  const en = parseInt(document.getElementById('assign-episode').value);
+  if (!sn || !en) { showToast('Enter season and episode numbers', 'error'); return; }
+  await window.DB.assignEpisode(assignEpisodeId, currentSeries.id, sn, en);
+  closeModal('assign-modal');
+  loadEpisodes(currentSeason);
+  showToast('Episode assigned!', 'success');
+};
+
+document.getElementById('btn-cancel-assign').onclick = () => closeModal('assign-modal');
+
+async function undoAssign(episodeId) {
+  const ok = await showConfirm('Undo manual assignment?', 'Undo Assignment');
+  if (!ok) return;
+  await window.DB.resetEpisodeAssignment(episodeId);
+  loadEpisodes(currentSeason);
+  showToast('Assignment restored', 'success');
+}
+
+async function doAutoSort() {
+  const btn = document.getElementById('auto-sort-btn');
+  if (btn) { btn.textContent = 'Running...'; btn.disabled = true; }
+  try {
+    const result = await window.DB.autoSortSeason(currentSeason.id);
+    if (result.assigned === 0) showToast('No episodes could be auto-assigned.', 'info');
+    else { showToast(`✅ Auto-sorted ${result.assigned} episode(s)!`, 'success'); loadSeasons(currentSeries); }
+  } catch(e) { showToast('Auto-sort failed: ' + e.message, 'error'); }
+  finally { if (btn) { btn.textContent = '✨ Auto-Sort'; btn.disabled = false; } }
+}
+
+const playerModal = document.getElementById('player-modal');
+const playerVideo = document.getElementById('player-video');
+const playerControls = document.getElementById('player-controls');
+let controlsTimeout = null;
+
+function showControls() {
+  if (!playerControls) return;
+  playerControls.classList.add('visible');
+  clearTimeout(controlsTimeout);
+  controlsTimeout = setTimeout(() => {
+    if (!playerVideo.paused) {
+      playerControls.classList.remove('visible');
+    }
+  }, 4000);
+}
+
+let isPlayingLock = false;
+
+async function playEpisode(ep) {
+  if (!ep) return;
+  // Let the streaming engine manage transitions to prevent race conditions
+  if (window.Streaming && window.Streaming.isTransitioning()) return;
+
+  if (isPlayingLock) return;
+  isPlayingLock = true;
+  appLog(`[Playback] Selected Episode ${ep.episodeNumber}: ${ep.title}`, '#38bdf8');
+  
+  try {
+    currentPlayingEp = ep;
+    autoNextActive = false;
+    clearInterval(autoNextTimer);
+    document.getElementById('auto-next-overlay').classList.remove('open');
+
+    const titleStr = ep.title || 'Untitled';
+    document.getElementById('player-title-bar').textContent = `Episode ${ep.episodeNumber}: ${titleStr}`;
+    playerModal.classList.add('open');
+    playerVideo.src = '';
+
+    showControls();
+    document.getElementById('btn-playpause').focus();
+
+    // Get the full message object for streaming
+    // Robust channel argument resolution
+    let channelArg = ep.channel;
+    if (typeof channelArg === 'string' && channelArg.startsWith('-100')) {
+      channelArg = window.bigInt ? window.bigInt(channelArg) : channelArg;
+    }
+
+    const meta = await window.TGClient.getMessageMeta(channelArg, ep.messageId);
+    if (!meta) { 
+      showToast('Could not load video metadata', 'error'); 
+      isPlayingLock = false;
+      return; 
+    }
+
+    // The streaming logic now hands off to native ExoPlayer plugin
+    // which renders over the webview.
+    // The connecting toast was moved into `streamToVideo` to prevent spam
+
+    // Pre-attach global sync method for native plugin callback
+    window.syncProgressNow = syncProgressNow;
+    window.closePlayerUIOnly = closePlayerUIOnly;
+    const statusOverlay = document.getElementById('player-status-overlay');
+    const statusMode = document.getElementById('status-mode');
+    const statusProg = document.getElementById('status-progress');
+    const statusErr  = document.getElementById('status-error');
+
+    statusOverlay.style.display = 'block';
+    statusErr.style.display = 'none';
+    statusMode.textContent = 'Mode: Connecting...';
+    statusProg.textContent = 'Requesting stream...';
+
+    await window.Streaming.streamToVideo(playerVideo, meta.message, meta.mimeType, (info) => {
+      if (info.mode) statusMode.textContent = `Mode: ${info.mode}`;
+      if (info.progress) statusProg.textContent = info.progress;
+      if (info.error) {
+        statusErr.textContent = `Error: ${info.error}`;
+        statusErr.style.display = 'block';
+      }
+    }, currentSettings.seek_step);
+
+    appLog(`[Playback] Native Stream transition initiated.`, '#22c55e');
+
+    if (playerVideo.readyState >= 1) { 
+      playerVideo.onloadedmetadata(); 
+    }
+  } catch(e) {
+    appLog(`[Playback ERROR] ${e.message}`, '#ef4444', 'error');
+    showToast('Stream failed: ' + e.message, 'error');
+  } finally {
+    // We clear isPlayingLock immediately here, but rely on window.Streaming.isTransitioning() 
+    // at the top to prevent parallel stream launches.
+    isPlayingLock = false;
+  }
+}
+
+function closePlayerUIOnly() {
+  // Guard: if a new episode is currently loading, don't undo the UI setup
+  if (isPlayingLock) {
+    console.log('[closePlayerUIOnly] Skipped — new episode is loading.');
+    return;
+  }
+  // Only called by native player_closed event to cleanup JS state
+  if (catalogView === 'episodes' && currentSeason) loadEpisodes(currentSeason);
+  else loadContinueWatching();
+  playerModal.classList.remove('open');
+}
+
+async function closePlayer() {
+  // 1. Tell Java to close the ExoPlayer dialog FIRST — this fires onDismissListener
+  //    which calls stopJsStream() and emits player_closed back to JS.
+  if (window.Capacitor && window.Capacitor.Plugins.StreamPlayer) {
+    window.Capacitor.Plugins.StreamPlayer.close().catch(() => {});
+  }
+  // 2. Abort any active JS iterDownload immediately
+  await window.Streaming.stop();
+  closePlayerUIOnly();
+}
+
+async function syncProgressNow(forceWatched = false, nativeTimeMs, nativeDurMs) {
+  if (!currentPlayingEp) return;
+  const t = (nativeTimeMs !== undefined) ? nativeTimeMs / 1000 : playerVideo.currentTime;
+  
+  // Duration priority order (most reliable first):
+  // 1. Previously stored progress duration (was correct when last saved)
+  // 2. ExoPlayer native duration (what the media engine actually read)
+  // 3. Telegram indexed metadata duration (may be 0 for unscanned MKVs)
+  const storedDur  = Number(currentPlayingEp.progress_duration) || 0; // from DB watchProgress.duration
+  const nativeDurSec = (nativeDurMs !== undefined && nativeDurMs > 0) ? nativeDurMs / 1000 : 0;
+  const indexedDur = Number(currentPlayingEp.duration) || 0;           // from episode.duration (Telegram metadata)
+  
+  const dur = storedDur > 60 ? storedDur
+            : nativeDurSec > 60 ? nativeDurSec
+            : indexedDur > 60 ? indexedDur
+            : 0; // Unknown — treat as unknown
+  
+  const durationKnown = dur > 60;
+  
+  console.log(`[ProgressSync] t=${t.toFixed(2)}s | stored=${storedDur.toFixed(0)}s | native=${nativeDurSec.toFixed(0)}s | indexed=${indexedDur.toFixed(0)}s | resolved=${dur.toFixed(0)}s | known=${durationKnown} | force=${forceWatched}`);
+
+  if (t > 5 || forceWatched) {
+    // SAFE: Only mark as Watched if we know the duration AND position is near the end.
+    // If duration is unknown, NEVER auto-mark — only save progress time.
+    const isWatched = forceWatched || (durationKnown && t >= (dur * 0.95));
+    
+    // SAFE: Only update stored duration if we have a better value than what's saved.
+    // Never overwrite a good stored duration with 0.
+    const saveDur = durationKnown ? Math.floor(dur) : (storedDur > 0 ? Math.floor(storedDur) : 0);
+    
+    await window.DB.updateProgress(userId, currentPlayingEp.id, Math.floor(t), saveDur, isWatched ? 1 : 0);
+  }
+}
+
+// Player controls
+document.getElementById('btn-close-player').onclick = closePlayer;
+document.getElementById('btn-playpause').onclick = () => {
+  if (playerVideo.paused) { playerVideo.play(); document.getElementById('btn-playpause').textContent = '⏸ Pause'; }
+  else { playerVideo.pause(); document.getElementById('btn-playpause').textContent = '▶ Play'; }
+  showControls();
+};
+document.getElementById('btn-rewind').onclick  = () => { 
+  playerVideo.currentTime -= currentSettings.seek_step; 
+  showControls(); 
+};
+document.getElementById('btn-forward').onclick = () => { 
+  playerVideo.currentTime += currentSettings.seek_step; 
+  showControls(); 
+};
+
+// Debug console logic
+async function appLog(msg, color = '#22c55e', level = 'info') {
+  console.log(`[APP-LOG] ${msg}`);
+  
+  // Also send to Native if plugin is available
+  try {
+     const { StreamPlayer } = window.Capacitor.Plugins;
+     if (StreamPlayer && StreamPlayer.logToNative) {
+        await StreamPlayer.logToNative({ msg, level });
+     }
+  } catch(e) {}
+
+  const content = document.getElementById('debug-content');
+  if (!content) return;
+  const time = new Date().toLocaleTimeString('en-GB', { hour12: false });
+  const line = document.createElement('div');
+  line.style.color = color;
+  line.innerHTML = `<span style="color:#64748b">[${time}]</span> ${msg}`;
+  content.appendChild(line);
+  if (content.children.length > 100) content.removeChild(content.firstElementChild);
+  document.getElementById('debug-panel').scrollTop = document.getElementById('debug-panel').scrollHeight;
+}
+
+function clearDebug() {
+  document.getElementById('debug-content').innerHTML = '[System] Console cleared...';
+}
+
+document.getElementById('btn-debug').onclick = () => {
+  const panel = document.getElementById('debug-panel');
+  const isHidden = panel.style.display === 'none';
+  panel.style.display = isHidden ? 'block' : 'none';
+  appLog(`Debugger ${isHidden ? 'Enabled' : 'Disabled'}`, isHidden ? '#38bdf8' : '#94a3b8');
+  showControls();
+};
+
+playerVideo.addEventListener('click', showControls);
+playerVideo.addEventListener('keydown', e => {
+  if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); document.getElementById('btn-playpause').click(); }
+});
+
+// Seek bar
+const seekBar = document.getElementById('seek-bar');
+playerVideo.addEventListener('timeupdate', () => {
+  if (!currentPlayingEp || playerVideo.seeking) return;
+  const cur = playerVideo.currentTime;
+  const dur = playerVideo.duration || 1;
+  seekBar.value = (cur / dur) * 100;
+  document.getElementById('time-current').textContent = formatTime(cur);
+  document.getElementById('time-total').textContent   = formatTime(dur);
+
+  // REMOVED: Periodic background sync to keep app lightweight for TV hardware.
+  // Progress is now exclusively saved via the 'player_closed' event on exit.
+
+  // Auto-next trigger
+  if (currentSettings.auto_next_enabled !== 0 && !autoNextActive && dur > 0) {
+    const left = dur - cur;
+    if (left <= currentSettings.auto_next_countdown && left > 0) startAutoNext(Math.ceil(left));
+  }
+});
+
+seekBar.addEventListener('input', () => {
+  playerVideo.currentTime = (seekBar.value / 100) * (playerVideo.duration || 0);
+  showControls();
+});
+
+// Auto-Next
+function startAutoNext(secs) {
+  autoNextActive = true;
+  const overlay = document.getElementById('auto-next-overlay');
+  const countEl = document.getElementById('auto-next-countdown');
+  overlay.classList.add('open');
+  countEl.textContent = secs;
+  let n = secs;
+  autoNextTimer = setInterval(() => {
+    n--;
+    if (n <= 0) { clearInterval(autoNextTimer); playNextEpisode(); }
+    else countEl.textContent = n;
+  }, 1000);
+  document.getElementById('btn-play-next').focus();
+}
+
+document.getElementById('btn-play-next').onclick = () => { clearInterval(autoNextTimer); playNextEpisode(); };
+document.getElementById('btn-cancel-next').onclick = () => {
+  clearInterval(autoNextTimer);
+  document.getElementById('auto-next-overlay').classList.remove('open');
+  currentSettings.auto_next_enabled = 0;
+};
+
+async function playNextEpisode() {
+  document.getElementById('auto-next-overlay').classList.remove('open');
+  autoNextActive = false;
+  try {
+    await syncProgressNow(true);
+    const eps = await window.DB.getEpisodesBySeasonId(currentPlayingEp.seasonId, userId);
+    const idx = eps.findIndex(e => e.id === currentPlayingEp.id);
+    if (idx >= 0 && idx < eps.length - 1) {
+      playEpisode(eps[idx + 1]);
+    } else {
+      closePlayer();
+    }
+  } catch(e) { closePlayer(); }
+}
+
+// ── Share from Phone ───────────────────────────────────────────────────────
+
+document.getElementById('share-phone-btn').onclick = async () => {
+  openModal('share-modal');
+  
+  // Create a session-specific token
+  const token = Math.random().toString(36).substring(2, 10);
+  const localIp = (window.AndroidBridge && window.AndroidBridge.getLocalIpAddress) 
+    ? window.AndroidBridge.getLocalIpAddress() 
+    : window.location.hostname;
+  
+  // Native Server runs on 9991
+  const shareUrl = `http://${localIp}:9991/share.html?token=${token}`;
+  
+  // Clear and regenerate QR
+  const container = document.getElementById('share-qr-container');
+  container.innerHTML = '';
+  new QRCode(container, {
+    text: shareUrl, width: 180, height: 180,
+    colorDark: '#000000', colorLight: '#ffffff'
+  });
+
+  // Add visible URL text for manual entry or verification
+  let urlHint = document.getElementById('share-url-hint');
+  if (!urlHint) {
+    urlHint = document.createElement('div');
+    urlHint.id = 'share-url-hint';
+    urlHint.style.marginTop = '15px';
+    urlHint.style.fontSize = '0.9rem';
+    urlHint.style.color = '#38bdf8';
+    urlHint.style.wordBreak = 'break-all';
+    container.parentNode.appendChild(urlHint);
+  }
+  urlHint.innerText = shareUrl;
+
+  // Add Wi-Fi Warning if not exists
+  let wifiWarning = document.getElementById('wifi-warning');
+  if (!wifiWarning) {
+    wifiWarning = document.createElement('div');
+    wifiWarning.id = 'wifi-warning';
+    wifiWarning.style.marginTop = '10px';
+    wifiWarning.style.color = '#fbbf24';
+    wifiWarning.style.fontSize = '0.85rem';
+    wifiWarning.innerHTML = '⚠️ וודא שהטלפון והטלוויזיה מחוברים ל<b>אותו Wi-Fi</b>.<br>(אל תשתמש ב-4G/5G בטלפון)';
+    container.parentNode.appendChild(wifiWarning);
+  }
+
+  // Start the temporary server in Java
+  if (window.Capacitor && window.Capacitor.Plugins.StreamPlayer) {
+    const { StreamPlayer } = window.Capacitor.Plugins;
+    await StreamPlayer.startShareServer({ token });
+
+    // One-time listener for the link
+    const listener = await StreamPlayer.addListener('link_shared', (data) => {
+      console.log('[Streaming] Shared link received:', data.link);
+      document.getElementById('source-link-input').value = data.link;
+      
+      // Cleanup
+      closeModal('share-modal');
+      listener.remove();
+      StreamPlayer.stopShareServer();
+      
+      document.getElementById('source-name-input').focus();
+    });
+  }
+};
+
+document.getElementById('close-share-modal').onclick = () => {
+  closeModal('share-modal');
+  if (window.Capacitor && window.Capacitor.Plugins.StreamPlayer) {
+    window.Capacitor.Plugins.StreamPlayer.stopShareServer();
+  }
+};
+
+// ── Sync on startup ────────────────────────────────────────────────────────
+
+async function syncFromTelegram() {
+  try {
+    const sourcesList = await window.TGClient.syncSourcesFromTelegram(userId);
+    if (sourcesList && Array.isArray(sourcesList)) {
+      const inserted = await window.DB.setSourcesForUser(userId, sourcesList);
+      // Kick off indexing for any new sources
+      for (const src of inserted) {
+        if (src.id) window.AppIndexer.indexSource(await window.DB.getSourceById(src.id));
+      }
+    }
+  } catch(e) { console.error('[Startup sync]', e); }
+}
+
+async function startApp() {
+  const sessionStr = localStorage.getItem('tg_session');
+  if (!sessionStr) {
+    window.location.replace('login.html');
+    return;
+  }
+
+  // Initial connectivity check
+  if (!navigator.onLine) {
+    updateOnlineStatus();
+    // Wait for online event or manual retry
+    return; 
+  }
+
+  const startupTimeout = setTimeout(() => {
+    const loader = document.getElementById('initial-loader');
+    if (loader && loader.style.display !== 'none') {
+       // Show the emergency logout buttons
+       const emergencyUI = document.getElementById('emergency-logout-container');
+       if (emergencyUI) {
+          emergencyUI.style.display = 'flex';
+          const loaderContent = document.getElementById('loader-content');
+          if (loaderContent) loaderContent.style.opacity = '0.5';
+          const logoutBtn = document.getElementById('emergency-logout-btn');
+          if (logoutBtn) logoutBtn.focus();
+       }
+    }
+  }, 10000); // 10 second timeout for emergency UI
+
+  try {
+    // Progress update
+    const loaderText = document.getElementById('loader-text');
+    if (loaderText) loaderText.textContent = 'Connecting to Telegram...';
+    
+    await window.TGClient.initClient();
+    
+    if (loaderText) loaderText.textContent = 'Verifying Session...';
+    const authed = await window.TGClient.checkExistingSession();
+    
+    clearTimeout(startupTimeout);
+    
+    if (!authed) {
+      window.location.replace('login.html');
+      return;
+    }
+    
+    // Hide loader, show app
+    document.getElementById('initial-loader').style.display = 'none';
+    document.getElementById('app').style.display = 'block';
+
+    userId = window.TGClient.currentUserId;
+    // Pre-fetch dialogs for channel access hashes
+    window.TGClient.getDialogs({}).catch(() => {});
+    // Load settings
+    await loadSettings();
+    // Sync sources from Telegram
+    await syncFromTelegram();
+    // Start indexing any existing sources
+    const sources = await window.DB.getSources(userId);
+    for (const src of sources) window.AppIndexer.indexSource(src);
+    
+    // Show catalog
+    showTab('catalog');
+    startIndexPoll(true);
+
+    // Focus first tab
+    document.getElementById('tab-catalog').focus();
+
+    // Signal updater that app is ready
+    window.AppIsReady = true;
+    if (window.AppUpdater && window.AppUpdater.triggerDelayedCheck) {
+      window.AppUpdater.triggerDelayedCheck();
+    }
+
+    // Connectivity Monitoring
+    window.addEventListener('online', updateOnlineStatus);
+    window.addEventListener('offline', updateOnlineStatus);
+    const retryBtn = document.getElementById('retry-internet-btn');
+    if (retryBtn) {
+      retryBtn.onclick = () => {
+        if (navigator.onLine) updateOnlineStatus();
+        else showToast('עדיין אין חיבור...', 'error');
+      };
+    }
+  } catch(e) {
+    clearTimeout(startupTimeout);
+    handleStartupError(e);
+  }
+}
+
+function handleStartupError(e) {
+  console.error('[App startup error]', e);
+  const loader = document.getElementById('initial-loader');
+  if (loader) {
+    let errorMsg = e.message || String(e);
+    
+    if (errorMsg.includes("FLOOD_WAIT")) {
+      const seconds = errorMsg.match(/\d+/);
+      errorMsg = `Telegram Flood Ban: Please wait ${seconds ? seconds[0] : 'some'} seconds before trying again.`;
+    } else if (errorMsg.includes("AUTH_KEY") || errorMsg.includes("USER_DEACTIVATED")) {
+      errorMsg = "Session expired or revoked. Please log in again.";
+    }
+
+    loader.innerHTML = `
+      <div style="color:#ef4444;text-align:center;padding:30px;max-width:500px;background:#1e293b;border-radius:12px;box-shadow:0 10px 25px rgba(0,0,0,0.5);">
+        <h2 style="margin-bottom:15px;">Connection Error</h2>
+        <p style="color:#94a3b8;margin-bottom:25px;line-height:1.5;">${errorMsg}</p>
+        <div style="display:flex;flex-direction:column;gap:12px;">
+          <button class="btn btn-primary focusable" onclick="window.location.reload()" tabindex="0" style="height:50px;">Retry Connection</button>
+          <button class="btn btn-danger focusable" id="error-logout-btn" tabindex="0" style="height:50px;">Logout / Switch Account</button>
+        </div>
+      </div>`;
+    
+    const logoutBtn = document.getElementById('error-logout-btn') || document.getElementById('emergency-logout-btn');
+    if (logoutBtn) {
+      logoutBtn.onclick = () => {
+        localStorage.clear();
+        window.location.replace('login.html');
+      };
+    }
+    
+    const btn = loader.querySelector('button');
+    if (btn) btn.focus();
+  } else {
+    alert('App startup error: ' + e.message);
+    window.location.replace('login.html');
+  }
+}
+
+startApp();
+</script>
+<!-- Floating Update Banner Overlay -->
+<div id="global-update-banner" style="display:none; position:fixed; top:30px; left:50%; transform:translateX(-50%) translateY(-100px); background:rgba(15, 23, 42, 0.98); color:#e0f2fe; padding:12px 28px; font-size:1.1rem; font-weight:700; border-radius:50px; z-index:10001; border:2px solid #38bdf8; box-shadow:0 15px 35px rgba(0,0,0,0.9); pointer-events:none; flex-direction:row; align-items:center; gap:12px; opacity:0; transition: transform 0.6s cubic-bezier(0.19, 1, 0.22, 1), opacity 0.6s ease;">
+  <span style="font-size:1.4rem; filter: drop-shadow(0 0 5px #38bdf8);">✨</span> 
+  <span>Update Available: Go to Settings to install</span>
+</div>
+
+<!-- Updater -->
+<script src="js/updater.js"></script>
+<script>
+  document.addEventListener('DOMContentLoaded', () => {
+    if (window.AppUpdater) window.AppUpdater.checkOnLaunch();
+  });
+</script>
+</body>
+</html>

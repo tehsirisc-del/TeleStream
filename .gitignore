@@ -6,7 +6,9 @@ logcat_dump.txt
 *.log
 dist/
 build/
-www/
+# webUI
+web/js/config.js
+
 android/.gradle/
 android/app/build/
 android/local.properties
@@ -14,5 +16,5 @@ android/capturing/
 android/.idea/
 .DS_Store
 node_modules
+Temp-old/
 # Generated from .env at build time — never commit real credentials
-public/js/config.js

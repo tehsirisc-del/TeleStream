@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TeleStream — Login</title>
+  <link rel="stylesheet" href="css/tv-style.css">
+  <!-- QR Code library -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+  <!-- GramJS browser bundle -->
+  <script src="js/vendor/telegram.browser.js"></script>
+  <!-- App config (injected at build step) -->
+  <script src="js/config.js"></script>
+  <!-- Dexie.js -->
+  <script src="js/vendor/dexie.min.js"></script>
+  <!-- DB & Telegram client -->
+  <script src="js/database.js"></script>
+  <script src="js/telegram-client.js"></script>
+  <script src="js/spatial-nav.js"></script>
+</head>
+<body>
+
+<!-- No Internet Overlay -->
+<div id="no-internet-overlay">
+  <div class="offline-icon">📡</div>
+  <h2 class="offline-title">אין חיבור לאינטרנט</h2>
+  <p class="offline-text">
+    נראה שהמכשיר אינו מחובר לרשת. אנא בדוק את הגדרות ה-Wi-Fi או חיבור הכבל בטלוויזיה שלך.
+  </p>
+  <button class="btn btn-primary focusable" id="retry-internet-btn" tabindex="0">נסה שוב</button>
+</div>
+
+<div class="login-screen" id="login-screen">
+
+  <!-- QR Container -->
+  <div class="login-box" id="qr-panel">
+    <div class="login-content">
+      <h1>🎬 TeleStream</h1>
+      <p>Scan the QR code with your Telegram mobile app to log in.</p>
+      
+      <ul class="login-instructions">
+        <li>Open Telegram on your smartphone</li>
+        <li>Go to <b>Settings → Devices</b></li>
+        <li>Tap <b>Link Desktop Device</b></li>
+        <li>Point your camera at the screen</li>
+      </ul>
+      
+      <button class="btn btn-secondary focusable" id="show-phone-btn" tabindex="0" style="width:100%;">
+        Login by Phone Number
+      </button>
+    </div>
+    
+    <div class="qr-section">
+      <div id="qr-container"><div id="qrcode-el"></div></div>
+      <div id="login-status" class="login-status">Connecting...</div>
+    </div>
+  </div>
+
+  <!-- Phone Container -->
+  <div class="login-box phone-mode hidden" id="phone-panel">
+    <div class="login-content">
+      <h1>📱 Phone Login</h1>
+      <p id="phone-desc">Enter your phone number in international format (+972...)</p>
+      <div id="phone-status" class="login-status"></div>
+    </div>
+    <div class="phone-section" style="width: 320px; display: flex; flex-direction: column; gap: 12px; flex-shrink: 0;">
+      <input type="tel" id="phone-input" class="styled-input" placeholder="+1234567890" tabindex="0" readonly>
+      <input type="number" id="code-input" class="styled-input hidden" placeholder="5-digit code" tabindex="0" inputmode="numeric" pattern="[0-9]*" oninput="if(this.value.length > 5) this.value = this.value.slice(0, 5);" readonly>
+      <input type="password" id="pass-input" class="styled-input hidden" placeholder="2FA Password" tabindex="0" readonly>
+      <button class="btn btn-primary focusable" id="phone-submit-btn" tabindex="0" style="width: 100%;">Send Code</button>
+      <button class="btn btn-secondary focusable hidden" id="change-number-btn" tabindex="0" style="width: 100%;">Change Number</button>
+      <button class="btn btn-secondary focusable" id="back-to-qr-btn" tabindex="0" style="width: 100%;">Back to QR</button>
+    </div>
+  </div>
+
+</div>
+
+<script>
+let qrCode = null;
+let currentPhoneStep = 'phone';
+let authTimer = null;
+let floodTimer = null;
+
+function clearStatus() {
+  const statusEl = document.getElementById('phone-status') || document.getElementById('login-status');
+  if (statusEl) {
+    statusEl.textContent = '';
+    statusEl.className = 'login-status';
+  }
+  if (floodTimer) {
+     clearInterval(floodTimer);
+     floodTimer = null;
+  }
+  const btn = document.getElementById('phone-submit-btn');
+  if (btn) btn.disabled = false;
+}
+
+function startFloodTimer(seconds) {
+  const statusEl = document.getElementById('phone-status') || document.getElementById('login-status');
+  const btn = document.getElementById('phone-submit-btn');
+  
+  if (floodTimer) clearInterval(floodTimer);
+  
+  let remaining = seconds;
+  btn.disabled = true;
+  statusEl.className = 'login-status error';
+  
+  floodTimer = setInterval(() => {
+    remaining--;
+    if (remaining <= 0) {
+      clearInterval(floodTimer);
+      floodTimer = null;
+      statusEl.textContent = 'Wait time over. You can try again.';
+      statusEl.className = 'login-status success';
+      btn.disabled = false;
+    } else {
+      statusEl.textContent = `Flood Ban: Please wait ${remaining} seconds...`;
+    }
+  }, 1000);
+}
+
+async function startApp() {
+  // Connectivity Monitoring
+  window.addEventListener('online', updateOnlineStatus);
+  window.addEventListener('offline', updateOnlineStatus);
+  document.getElementById('retry-internet-btn').onclick = () => {
+    if (navigator.onLine) updateOnlineStatus();
+    else {
+       const statusEl = document.getElementById('phone-status') || document.getElementById('login-status');
+       statusEl.textContent = 'עדיין אין חיבור...';
+       statusEl.className = 'login-status error';
+    }
+  };
+  
+  if (!navigator.onLine) {
+    updateOnlineStatus();
+    return;
+  }
+
+  const statusEl = document.getElementById('login-status');
+  try {
+    statusEl.textContent = 'Initializing Telegram...';
+    await window.TGClient.initClient();
+    statusEl.textContent = 'Checking session...';
+    const authed = await window.TGClient.checkExistingSession();
+    if (authed) {
+      statusEl.textContent = 'Authenticated! Redirecting...';
+      window.location.href = 'index.html';
+      return;
+    }
+    statusEl.textContent = 'Not logged in. Starting QR flow...';
+  } catch(e) {
+    console.error('[Login] Init error:', e);
+    statusEl.textContent = 'Init Error: ' + (e.message || e);
+    statusEl.className = 'login-status error';
+    return; // Stop if init fails
+  }
+
+  // Start QR flow
+  startQrFlow();
+
+  SpatialNav.init(() => {
+    // Back on login → do nothing (can't exit)
+  });
+  document.querySelector('#show-phone-btn').focus();
+}
+
+function updateOnlineStatus() {
+  const overlay = document.getElementById('no-internet-overlay');
+  if (navigator.onLine) {
+    if (overlay.classList.contains('visible')) {
+      overlay.classList.remove('visible');
+      // Restart if we were stuck
+      startApp();
+    }
+  } else {
+    overlay.classList.add('visible');
+  }
+}
+
+function startQrFlow() {
+  const statusEl = document.getElementById('login-status');
+  statusEl.textContent = 'Generating QR code...';
+  statusEl.className = 'login-status';
+
+  window.TGClient.startQrLogin(
+    (link) => {
+      statusEl.textContent = 'Waiting for scan...';
+      if (!qrCode) {
+        qrCode = new QRCode(document.getElementById('qrcode-el'), {
+          text: link, width: 200, height: 200,
+          colorDark: '#000000', colorLight: '#ffffff',
+          correctLevel: QRCode.CorrectLevel.M
+        });
+      } else {
+        qrCode.clear();
+        qrCode.makeCode(link);
+      }
+    },
+    (userId) => {
+      statusEl.textContent = 'Login successful! Loading...';
+      statusEl.className = 'login-status';
+      setTimeout(() => { window.location.href = 'index.html'; }, 800);
+    },
+    (err) => {
+      statusEl.textContent = 'QR Error: ' + err;
+      statusEl.className = 'login-status error';
+    }
+  );
+}
+
+// Phone flow
+document.getElementById('show-phone-btn').onclick = () => {
+  clearStatus();
+  currentPhoneStep = 'phone';
+  document.getElementById('qr-panel').classList.add('hidden');
+  document.getElementById('phone-panel').classList.remove('hidden');
+  document.getElementById('phone-desc').textContent = 'Enter your phone number in international format (+972...)';
+  document.getElementById('phone-input').classList.remove('hidden');
+  document.getElementById('code-input').classList.add('hidden');
+  document.getElementById('pass-input').classList.add('hidden');
+  document.getElementById('change-number-btn').classList.add('hidden');
+  document.getElementById('phone-submit-btn').textContent = 'Send Code';
+  document.getElementById('phone-input').focus();
+};
+
+document.getElementById('change-number-btn').onclick = () => {
+  clearStatus();
+  currentPhoneStep = 'phone';
+  document.getElementById('phone-input').classList.remove('hidden');
+  document.getElementById('code-input').classList.add('hidden');
+  document.getElementById('pass-input').classList.add('hidden');
+  document.getElementById('change-number-btn').classList.add('hidden');
+  document.getElementById('phone-desc').textContent = 'Enter your phone number in international format (+972...)';
+  document.getElementById('phone-submit-btn').textContent = 'Send Code';
+  
+  // Clear values
+  document.getElementById('code-input').value = '';
+  document.getElementById('pass-input').value = '';
+  
+  document.getElementById('phone-input').focus();
+};
+
+document.getElementById('back-to-qr-btn').onclick = () => {
+  document.getElementById('phone-panel').classList.add('hidden');
+  document.getElementById('qr-panel').classList.remove('hidden');
+};
+
+document.getElementById('phone-submit-btn').onclick = async () => {
+  const btn = document.getElementById('phone-submit-btn');
+  const statusEl = document.getElementById('phone-status');
+  btn.disabled = true;
+  statusEl.className = 'login-status';
+
+  if (currentPhoneStep === 'phone') {
+    const phone = document.getElementById('phone-input').value.trim();
+    if (!phone) { btn.disabled = false; return; }
+    statusEl.textContent = 'Requesting code...';
+
+    window.TGClient.startPhoneLogin(
+      phone,
+      (state) => {
+        if (state === 'wait_code') {
+          clearStatus();
+          currentPhoneStep = 'code';
+          document.getElementById('phone-input').classList.add('hidden');
+          document.getElementById('code-input').classList.remove('hidden');
+          document.getElementById('change-number-btn').classList.remove('hidden');
+          document.getElementById('phone-desc').textContent = `Code sent to ${phone}`;
+          btn.textContent = 'Verify Code';
+          btn.disabled = false;
+          document.getElementById('code-input').focus();
+        } else if (state === 'wait_password') {
+          clearStatus();
+          currentPhoneStep = 'password';
+          document.getElementById('code-input').classList.add('hidden');
+          document.getElementById('pass-input').classList.remove('hidden');
+          document.getElementById('phone-desc').textContent = 'Enter your 2FA password';
+          btn.textContent = 'Submit Password';
+          btn.disabled = false;
+          document.getElementById('pass-input').focus();
+        }
+      },
+      (userId) => {
+        statusEl.textContent = 'Login successful! Loading...';
+        statusEl.className = 'login-status success';
+        setTimeout(() => { window.location.href = 'index.html'; }, 800);
+      },
+      (err) => {
+        const errorMsg = String(err);
+        if (errorMsg.includes("wait of")) {
+          const seconds = errorMsg.match(/\d+/);
+          if (seconds) {
+            startFloodTimer(parseInt(seconds[0]));
+            return;
+          }
+        }
+        statusEl.textContent = 'Error: ' + err;
+        statusEl.className = 'login-status error';
+        btn.disabled = false;
+      }
+    );
+  } else if (currentPhoneStep === 'code') {
+    const code = document.getElementById('code-input').value.trim();
+    if (!code) { btn.disabled = false; return; }
+    statusEl.textContent = 'Verifying code...';
+    window.TGClient.submitPhoneCode(code);
+    btn.disabled = false;
+  } else if (currentPhoneStep === 'password') {
+    const pass = document.getElementById('pass-input').value.trim();
+    if (!pass) { btn.disabled = false; return; }
+    statusEl.textContent = 'Verifying password...';
+    window.TGClient.submitPassword(pass);
+    btn.disabled = false;
+  }
+};
+
+// Handle Enter to auto-submit fields
+document.getElementById('phone-input').addEventListener('keydown', function(e) {
+  if (e.key === 'Enter' && !this.readOnly) { e.preventDefault(); document.getElementById('phone-submit-btn').click(); }
+});
+document.getElementById('code-input').addEventListener('keydown', function(e) {
+  if (e.key === 'Enter' && !this.readOnly) { e.preventDefault(); document.getElementById('phone-submit-btn').click(); }
+});
+document.getElementById('pass-input').addEventListener('keydown', function(e) {
+  if (e.key === 'Enter' && !this.readOnly) { e.preventDefault(); document.getElementById('phone-submit-btn').click(); }
+});
+
+// MainActivity back button support
+window.handleBack = () => {
+  if (!document.getElementById('phone-panel').classList.contains('hidden')) {
+    document.getElementById('back-to-qr-btn').click();
+  }
+};
+
+startApp();
+</script>
+</body>
+</html>

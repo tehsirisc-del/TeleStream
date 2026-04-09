@@ -29,7 +29,7 @@ app.get(['/', '/index.html'], (req, res, next) => {
 });
 
 app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static(path.join(__dirname, 'web')));
 
 // ─── Share Link SSE ─────────────────────────────────────────────────────────
 const shareListeners = new Map(); // token => res

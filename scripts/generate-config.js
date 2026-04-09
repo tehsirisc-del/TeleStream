@@ -36,6 +36,6 @@ window.TG_API_ID   = '${apiId}';
 window.TG_API_HASH = '${apiHash}';
 `;
 
-const outPath = path.resolve(__dirname, '../www/js/config.js');
+const outPath = path.resolve(__dirname, '../web/js/config.js');
 fs.writeFileSync(outPath, output, 'utf-8');
 console.log(`[generate-config] ✅ config.js written with API_ID=${apiId}`);

@@ -6,7 +6,7 @@ module.exports = {
   entry: './build-entry.js',
   output: {
     filename: 'telegram.browser.js',
-    path: path.resolve(__dirname, 'www/js/vendor'),
+    path: path.resolve(__dirname, 'web/js/vendor'),
     library: 'TelegramModule',
     libraryTarget: 'window'
   },

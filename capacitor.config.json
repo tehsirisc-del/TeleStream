@@ -1,7 +1,7 @@
 {
   "appId": "com.telestream.tv",
   "appName": "TeleStream",
-  "webDir": "www",
+  "webDir": "web",
   "server": {
     "cleartext": true,
     "androidScheme": "http",
