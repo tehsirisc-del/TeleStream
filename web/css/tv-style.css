@@ -57,9 +57,10 @@ html, body {
 /* ── Tab Bar ───────────────────────────────────────────────────────── */
 #tab-bar {
   display: flex;
-  gap: 36px;
-  padding: var(--overscan);
-  padding-bottom: 24px;
+  justify-content: center; /* Center tabs to fix the gap issue */
+  gap: 60px; /* Increased gap for better TV readability */
+  padding: 20px var(--overscan);
+  padding-bottom: 20px;
   flex-shrink: 0;
   border-bottom: 1px solid rgba(255,255,255,0.05);
 }
@@ -78,7 +79,13 @@ html, body {
   border-bottom: 4px solid transparent;
 }
 
-.tab-item .tab-icon { font-size: 1.4rem; }
+.tab-item .tab-icon { 
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.6rem;
+  font-size: 1.4rem; 
+}
 
 .tab-item.active {
   background: transparent;
@@ -97,6 +104,29 @@ html, body {
   border-color: transparent !important;
 }
 
+/* ── Integrated Update Tab (Pill Style in Top Area) ── */
+.tab-item-update {
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
+  background: rgba(59, 130, 246, 0.1);
+  color: var(--accent) !important;
+  padding: 10px 24px !important;
+  border-radius: 50px;
+  border: 1px solid var(--accent) !important;
+  font-weight: 700 !important;
+  font-size: 1.1rem;
+  transition: all 0.2s ease;
+}
+
+.tab-item-update:focus, 
+.tab-item-update.focused {
+  background: var(--accent) !important;
+  color: white !important;
+  box-shadow: 0 0 20px rgba(59, 130, 246, 0.5) !important;
+  transform: scale(1.08) !important;
+}
+
 /* ── Main Content Area ─────────────────────────────────────────────── */
 /* No overflow set (same as login page) — body handles the real clip.
    This allows the #focus-ring (position:fixed) to paint freely. */
@@ -113,7 +143,7 @@ html, body {
   height: max-content; 
   min-height: 100%; 
   overflow: visible; 
-  padding: 20px var(--overscan) 60px var(--overscan); 
+  padding: 10px var(--overscan) 20px var(--overscan); /* Reduced bottom/top gap */
 }
 .view.active { display: flex; }
 

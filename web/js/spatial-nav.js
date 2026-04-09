@@ -7,14 +7,17 @@
  */
 const SpatialNav = (() => {
   let backCallback = null;
+  let lastTabFocus = null;
 
   function isBlocked() {
     // Check if any full-screen blocking overlay is visible
     const loader = document.getElementById('initial-loader');
     const sync = document.getElementById('sync-overlay');
+    const update = document.getElementById('update-overlay-popup');
     const loaderVisible = loader && window.getComputedStyle(loader).display !== 'none';
     const syncVisible = sync && window.getComputedStyle(sync).display !== 'none';
-    return loaderVisible || syncVisible;
+    const updateVisible = update && window.getComputedStyle(update).display !== 'none';
+    return loaderVisible || syncVisible || updateVisible;
   }
 
   // ── Init ──────────────────────────────────────────────────────────────────
@@ -140,8 +143,21 @@ const SpatialNav = (() => {
         if (key === 'ArrowDown' && dy <= 0) continue;
         if (key === 'ArrowUp'   && dy >= 0) continue;
 
+        // --- SPECIAL LOGIC FOR UPDATE NOTIF PILL ---
+        // 1. If moving UP to notif zone, remember where we came from
+        if (key === 'ArrowUp' && elZone === 'notif' && currentZone === 'tabs') {
+            lastTabFocus = active;
+        }
+        // 2. If moving DOWN from notif zone, restore last known tab focus
+        if (key === 'ArrowDown' && currentZone === 'notif' && elZone === 'tabs') {
+            if (lastTabFocus && focusables.indexOf(lastTabFocus) !== -1) {
+                best = lastTabFocus;
+                break; // Found our exact target
+            }
+        }
+
         // If moving to the Tab Bar from below, only target the ACTIVE tab to avoid losing horizontal context.
-        if (key === 'ArrowUp' && elZone === 'tabs' && currentZone !== 'tabs') {
+        if (key === 'ArrowUp' && elZone === 'tabs' && currentZone !== 'tabs' && currentZone !== 'notif') {
           if (!el.classList.contains('active')) continue;
         }
 

@@ -38,15 +38,14 @@ class Updater {
             const vDisp = document.getElementById('app-version-display');
             if (vDisp) vDisp.innerText = `v${result.currentVersion || '1.0.0'}`;
 
+
             if (result.updateAvailable) {
                 this.latestUpdateInfo = result;
-                
-                const banner = document.getElementById('global-update-banner');
-                if (banner) {
-                    banner.style.display = 'flex';
-                    void banner.offsetWidth; // Force layout
-                    banner.style.opacity = '1';
-                    banner.style.transform = 'translateX(-50%) translateY(0)';
+                const updateContainer = document.getElementById('top-notif-container');
+                const updateTab = document.getElementById('tab-update');
+                if (updateContainer && updateTab) {
+                    updateContainer.style.display = 'flex';
+                    updateTab.onclick = () => this.checkForUpdatesManual();
                 }
                 
                 const badge = document.getElementById('update-badge');
@@ -95,7 +94,7 @@ class Updater {
         overlay.style.borderTop = '2px solid #3b82f6';
         overlay.style.boxShadow = '0 -10px 40px rgba(0,0,0,0.5)';
         overlay.style.zIndex = '9999';
-        overlay.style.fontFamily = 'sans-serif';
+        overlay.id = 'update-overlay-popup';
         overlay.style.transition = 'bottom 0.5s cubic-bezier(0.16, 1, 0.3, 1)';
         overlay.style.display = 'flex';
         overlay.style.flexDirection = 'column';
@@ -189,7 +188,26 @@ class Updater {
             });
         };
 
-        // Keyboard handling (D-pad)
+        // Keyboard handling (D-pad + Native Back Button)
+        if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.App) {
+            this.backAppListener = window.Capacitor.Plugins.App.addListener('backButton', (data) => {
+                if (this.overlay) {
+                    this.dismissDialog();
+                }
+            });
+        }
+        
+        this.backKeyListener = (e) => {
+            const isBack = e.key === 'Backspace' || e.key === 'Escape' || e.key === 'BrowserBack' || e.keyCode === 27 || e.keyCode === 4;
+            if (isBack && this.overlay) {
+                if (this.isUpdating) return;
+                e.preventDefault();
+                e.stopImmediatePropagation();
+                this.dismissDialog();
+            }
+        };
+        window.addEventListener('keydown', this.backKeyListener, true);
+
         [updateBtn, laterBtn].forEach(btn => {
             btn.addEventListener('keydown', (e) => {
                 if (e.key === 'Enter') {
@@ -238,6 +256,14 @@ class Updater {
 
     dismissDialog() {
         if (!this.overlay) return;
+        if (this.backKeyListener) {
+            window.removeEventListener('keydown', this.backKeyListener, true);
+            this.backKeyListener = null;
+        }
+        if (this.backAppListener) {
+            this.backAppListener.remove();
+            this.backAppListener = null;
+        }
         this.overlay.style.bottom = '-300px';
         setTimeout(() => {
             if (this.overlay && this.overlay.parentNode) {

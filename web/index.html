@@ -55,12 +55,17 @@
 <!-- ── Main App Shell ──────────────────────────────── -->
 <div id="app" style="display:none;">
 
+  <!-- Top Notification Area -->
+  <div id="top-notif-container" data-nav-zone="notif" style="display:none; justify-content:center; padding-top: 10px; pointer-events:none;">
+    <div class="tab-item-update focusable" id="tab-update" tabindex="0" style="pointer-events: auto;">✨ Update Available</div>
+  </div>
+
   <!-- Tab Bar -->
   <div id="tab-bar" data-nav-zone="tabs">
-    <div class="tab-item active focusable" id="tab-catalog"   tabindex="0"><span class="tab-icon">📺</span> Catalog</div>
-    <div class="tab-item focusable"        id="tab-favorites" tabindex="0"><span class="tab-icon">❤️</span> Favorites</div>
-    <div class="tab-item focusable"        id="tab-sources"   tabindex="0"><span class="tab-icon">➕</span> Sources</div>
-    <div class="tab-item focusable"        id="tab-settings"  tabindex="0"><span class="tab-icon">⚙️</span> Settings</div>
+    <div class="tab-item active focusable" id="tab-catalog" tabindex="0"><span class="tab-icon">📺</span> Catalog</div>
+    <div class="tab-item focusable" id="tab-favorites" tabindex="0"><span class="tab-icon">❤️</span> Favorites</div>
+    <div class="tab-item focusable" id="tab-sources" tabindex="0"><span class="tab-icon">➕</span> Sources</div>
+    <div class="tab-item focusable" id="tab-settings" tabindex="0"><span class="tab-icon">⚙️</span> Settings</div>
   </div>
 
   <!-- Content Area -->
@@ -408,6 +413,12 @@ function handleBack() {
       closeModal(m);
       return;
     }
+  }
+  // Update Overlay
+  const updatePopup = document.getElementById('update-overlay-popup');
+  if (updatePopup && window.AppUpdater) {
+    window.AppUpdater.dismissDialog();
+    return;
   }
   // Player
   if (document.getElementById('player-modal').classList.contains('open')) {
@@ -1614,11 +1625,7 @@ function handleStartupError(e) {
 
 startApp();
 </script>
-<!-- Floating Update Banner Overlay -->
-<div id="global-update-banner" style="display:none; position:fixed; top:30px; left:50%; transform:translateX(-50%) translateY(-100px); background:rgba(15, 23, 42, 0.98); color:#e0f2fe; padding:12px 28px; font-size:1.1rem; font-weight:700; border-radius:50px; z-index:10001; border:2px solid #38bdf8; box-shadow:0 15px 35px rgba(0,0,0,0.9); pointer-events:none; flex-direction:row; align-items:center; gap:12px; opacity:0; transition: transform 0.6s cubic-bezier(0.19, 1, 0.22, 1), opacity 0.6s ease;">
-  <span style="font-size:1.4rem; filter: drop-shadow(0 0 5px #38bdf8);">✨</span> 
-  <span>Update Available: Go to Settings to install</span>
-</div>
+<!-- Integrated Update Banner (Moved to Tab Bar) -->
 
 <!-- Updater -->
 <script src="js/updater.js"></script>
