@@ -1,0 +1,38 @@
+{
+  "name": "telestream",
+  "version": "1.0.0",
+  "description": "TeleStream - Telegram Media Player for Android TV",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@capacitor/android": "^8.3.0",
+    "@capacitor/app": "^8.1.0",
+    "@capacitor/core": "^8.3.0",
+    "better-sqlite3": "^12.8.0",
+    "big-integer": "^1.6.52",
+    "buffer": "^6.0.3",
+    "crypto-browserify": "^3.12.1",
+    "dotenv": "^17.3.1",
+    "express": "^5.2.1",
+    "input": "^1.0.1",
+    "lru-cache": "^11.2.7",
+    "os-browserify": "^0.3.0",
+    "path-browserify": "^1.0.1",
+    "process": "^0.11.10",
+    "qrcode": "^1.5.4",
+    "stream-browserify": "^3.0.0",
+    "telegram": "^2.26.22",
+    "util": "^0.12.5"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^8.3.0",
+    "webpack": "^5.105.4",
+    "webpack-cli": "^7.0.2"
+  }
+}

@@ -1,0 +1,1053 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Stream Catalog</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+
+<body>
+
+  <div class="sidebar">
+    <div class="sidebar-brand">
+      <div class="icon">🎬</div> <span>TeleStream</span>
+    </div>
+    <ul class="nav-menu">
+      <li id="nav-catalog" class="active" tabindex="0">
+        <div class="icon">📺</div> <span>Catalog</span>
+      </li>
+      <li id="nav-favorites" tabindex="0">
+        <div class="icon">❤️</div> <span>Favorites</span>
+      </li>
+      <li id="nav-sources" tabindex="0">
+        <div class="icon">➕</div> <span>Sources</span>
+      </li>
+      <li id="nav-settings" tabindex="0">
+        <div class="icon">⚙️</div> <span>Settings</span>
+      </li>
+    </ul>
+  </div>
+
+  <div class="main-content" id="view-catalog">
+    <div class="hero-banner" id="hero-banner" style="display: none;">
+      <div class="hero-content">
+        <h1 class="hero-title" id="hero-title">TeleStream</h1>
+        <p class="hero-desc" id="hero-desc">Discover the best content directly from Telegram.</p>
+      </div>
+    </div>
+    <div id="continue-watching-section" style="display:none; margin-bottom: 32px;">
+      <h2 class="section-title">Continue Watching</h2>
+      <div id="continue-watching-grid" class="row-container"></div>
+    </div>
+    <div id="breadcrumb" class="breadcrumb">
+      <span onclick="loadCatalog()" style="cursor:pointer;" tabindex="0">Series</span>
+    </div>
+    <!-- Indexing progress pill -->
+    <div id="indexing-pill">
+      <span class="spin">⏳</span>
+      <span id="indexing-pill-text">Indexing new content…</span>
+    </div>
+    <div id="grid-container" class="row-container"></div>
+  </div>
+
+  <div class="main-content" id="view-favorites" style="display:none;">
+    <div class="view-padding">
+      <h2 style="margin-bottom: 24px;">Your Favorites</h2>
+      <div id="favorites-grid" class="grid-container"></div>
+    </div>
+  </div>
+
+  <div class="main-content" id="view-settings" style="display:none;">
+    <div class="view-padding">
+      <h2 style="margin-bottom: 24px;">Settings</h2>
+      <div
+        style="background: var(--bg-surface); border: 1px solid rgba(255,255,255,0.05); border-radius: 12px; padding: 24px; max-width: 500px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+          <div>
+            <h4 style="font-size: 1.1rem; color: var(--text-primary); margin-bottom: 4px;">Auto Next Episode</h4>
+            <p style="font-size: 0.85rem; color: var(--text-secondary);">Automatically play next episode when current
+              ends.</p>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="setting-auto-next">
+            <span class="slider"></span>
+          </label>
+        </div>
+        <div style="margin-bottom: 24px;">
+          <label style="color: var(--text-secondary); font-size: 0.85rem; display: block; margin-bottom: 6px;">Countdown
+            Duration (Seconds)</label>
+          <input type="number" id="setting-countdown" class="styled-input" style="width: 100%;" min="1" max="60">
+        </div>
+        <button id="btn-save-settings" class="primary-btn">Save Settings</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="main-content" id="view-sources" style="display:none;">
+    <div class="view-padding">
+      <h2 style="margin-bottom: 24px;">Manage Sources</h2>
+      <div class="input-group">
+        <input type="text" id="sourceName" class="styled-input" placeholder="Source Name (e.g., My Fav Channel)" />
+        <input type="text" id="sourceLink" class="styled-input" placeholder="Telegram Link" />
+        <button id="addSourceBtn" class="primary-btn">Add Source</button>
+      </div>
+      <button id="sharePhoneBtn" class="primary-btn"
+        style="width:100%; background:#0ea5e9; color:white; margin-bottom: 20px;">📱 Share Link from Phone</button>
+      <ul id="source-list" class="source-list"></ul>
+    </div>
+  </div>
+
+  <div id="player-modal" class="modal">
+    <div class="player-content">
+      <div class="player-header">
+        <h3 id="player-title">Playing Video</h3>
+        <button class="close-btn" id="close-player">&times;</button>
+      </div>
+      <div id="auto-next-overlay"
+        style="display:none; position:absolute; inset: 0; background: rgba(0,0,0,0.8); z-index: 60; flex-direction: column; justify-content: center; align-items: center; top: 61px; bottom: 0;">
+        <h2 style="color: white; margin-bottom: 16px; font-size: 1.5rem;">Next Episode starting in <span
+            id="auto-next-countdown">15</span>...</h2>
+        <div style="display: flex; gap: 16px;">
+          <button class="primary-btn" id="btn-play-next">Play Now</button>
+          <button class="primary-btn" id="btn-cancel-next" style="background:#475569;">Cancel Auto-Play</button>
+        </div>
+      </div>
+      <video id="mainVideo" controls></video>
+    </div>
+  </div>
+
+  <!-- Add Source Modal -->
+  <div id="add-source-modal" class="modal">
+    <div class="player-content" style="padding: 32px; max-width: 450px; text-align: center;">
+      <h3 style="margin-bottom: 16px; font-size: 1.4rem;">Source Configuration</h3>
+      <p style="color: #94a3b8; font-size: 0.95rem; margin-bottom: 24px;">Does this Telegram channel contain a
+        <b>single</b> TV series, or does it contain <b>multiple</b> different series?
+      </p>
+      <div style="display: flex; gap: 12px; margin-bottom: 16px;">
+        <button class="primary-btn" id="btn-single-series" style="flex: 1;">Single Series</button>
+        <button class="primary-btn" id="btn-multi-series" style="background: #475569; flex: 1;">Multiple</button>
+      </div>
+      <button class="primary-btn" id="cancel-source"
+        style="background: transparent; color: #94a3b8; border: 1px solid #475569; width: 100%;">Cancel</button>
+    </div>
+  </div>
+
+  <!-- Assign Episode Modal -->
+  <div id="assign-episode-modal" class="modal">
+    <div class="player-content" style="padding: 32px; max-width: 400px; text-align: center;">
+      <h3 style="margin-bottom: 16px; font-size: 1.4rem;">Manual Assignment</h3>
+      <p style="color: #94a3b8; font-size: 0.95rem; margin-bottom: 24px;">Please set the target Season and Episode
+        numbers for this video.</p>
+
+      <div style="text-align: left; margin-bottom: 16px;">
+        <label style="color: #94a3b8; font-size: 0.85rem; display: block; margin-bottom: 6px;">Season Number</label>
+        <input type="number" id="input-assign-season" class="styled-input" placeholder="e.g. 1" style="width: 100%;">
+      </div>
+
+      <div style="text-align: left; margin-bottom: 24px;">
+        <label style="color: #94a3b8; font-size: 0.85rem; display: block; margin-bottom: 6px;">Episode Number</label>
+        <input type="number" id="input-assign-episode" class="styled-input" placeholder="e.g. 5" style="width: 100%;">
+      </div>
+
+      <div style="display: flex; gap: 12px; margin-bottom: 16px;">
+        <button class="primary-btn" id="btn-submit-assign" style="flex: 1;">Assign</button>
+        <button class="primary-btn" id="btns-cancel-assign" style="background: #475569; flex: 1;">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Share Modal -->
+  <div id="shareModal" class="modal">
+    <div class="player-content"
+      style="padding: 32px; max-width: 350px; text-align: center; display: flex; flex-direction: column; align-items: center;">
+      <h3 style="margin-bottom: 10px; font-size: 1.4rem;">Scan to Share</h3>
+      <p style="color: #94a3b8; font-size: 0.95rem; margin-bottom: 20px;">Scan this QR code with your phone. Any link
+        you share from your phone will automatically appear here.</p>
+      <div id="shareQr" style="background:#fff; padding:16px; display: block; border-radius:8px; line-height: 0;"></div>
+      <button id="closeModal" class="primary-btn"
+        style="margin-top:24px; background:#475569; display:block; width:100%;">Close</button>
+    </div>
+  </div>
+  <script>
+    document.addEventListener('DOMContentLoaded', () => {
+      // Navigation
+      ['catalog', 'favorites', 'sources', 'settings'].forEach(v => {
+        document.getElementById(`nav-${v}`).onclick = () => showView(v);
+      });
+
+      // ── Custom UI Logic ────────────────────────────────────────────────
+      window.showToast = (message, type = 'info') => {
+        const container = document.getElementById('toast-container');
+        const toast = document.createElement('div');
+        toast.className = `toast ${type}`;
+        const icon = type === 'success' ? '✓' : type === 'error' ? '⚠' : 'ℹ';
+        toast.innerHTML = `<span>${icon}</span><span>${message}</span>`;
+        container.appendChild(toast);
+
+        setTimeout(() => {
+          toast.classList.add('hiding');
+          setTimeout(() => toast.remove(), 400);
+        }, 4000);
+      };
+
+      window.showConfirm = (message, title = 'Confirm Action', isDanger = false) => {
+        return new Promise((resolve) => {
+          const modal = document.getElementById('custom-confirm-modal');
+          const titleEl = document.getElementById('confirm-title');
+          const msgEl = document.getElementById('confirm-msg');
+          const okBtn = document.getElementById('confirm-ok');
+          const cancelBtn = document.getElementById('confirm-cancel');
+
+          titleEl.innerText = title;
+          msgEl.innerText = message;
+          okBtn.className = isDanger ? 'modal-btn confirm danger' : 'modal-btn confirm';
+
+          modal.style.display = 'flex';
+
+          const cleanup = (val) => {
+            modal.style.display = 'none';
+            okBtn.onclick = null;
+            cancelBtn.onclick = null;
+            resolve(val);
+          };
+
+          okBtn.onclick = () => cleanup(true);
+          cancelBtn.onclick = () => cleanup(false);
+          modal.onclick = (e) => { if (e.target === modal) cleanup(false); };
+        });
+      };
+
+      function showView(view) {
+        ['catalog', 'favorites', 'sources', 'settings'].forEach(v => {
+          const el = document.getElementById(`view-${v}`);
+          if (el) el.style.display = view === v ? 'flex' : 'none';
+          const nav = document.getElementById(`nav-${v}`);
+          if (nav) nav.className = view === v ? 'active' : '';
+        });
+        if (view === 'catalog') { loadCatalog(); if (window.loadContinueWatching) window.loadContinueWatching(); }
+        if (view === 'sources') loadSources();
+        if (view === 'favorites' && window.loadFavorites) window.loadFavorites();
+        // Kick off indexing status poll when catalog or sources are opened
+        if (view === 'catalog' || view === 'sources') {
+          if (typeof startIndexingPoll === 'function') startIndexingPoll();
+        }
+      }
+
+      // --- Sources ---
+      const addSourceBtn = document.getElementById('addSourceBtn');
+      const addSourceModal = document.getElementById('add-source-modal');
+
+      let pendingSourceName = '';
+      let pendingSourceLink = '';
+
+      addSourceBtn.onclick = () => {
+        pendingSourceName = document.getElementById('sourceName').value;
+        pendingSourceLink = document.getElementById('sourceLink').value;
+        if (!pendingSourceLink) return showToast('Link is required', 'error');
+        addSourceModal.style.display = 'flex';
+      };
+
+      document.getElementById('cancel-source').onclick = () => { addSourceModal.style.display = 'none'; };
+
+      document.getElementById('btn-single-series').onclick = () => submitSource(true);
+      document.getElementById('btn-multi-series').onclick = () => submitSource(false);
+
+      async function submitSource(isSingleSeries) {
+        addSourceModal.style.display = 'none';
+        addSourceBtn.disabled = true;
+        addSourceBtn.innerText = 'Adding...';
+        try {
+          const res = await fetch('/api/sources', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: pendingSourceName, link: pendingSourceLink, isSingleSeries })
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || 'Failed');
+          document.getElementById('sourceName').value = '';
+          document.getElementById('sourceLink').value = '';
+          await loadSources();
+          startIndexingPoll(true);
+          showToast('Source added and indexing started!', 'success');
+        } catch (e) {
+          console.error('[Add Source Error]', e);
+          showToast(e.message, 'error');
+        } finally {
+          addSourceBtn.disabled = false;
+          addSourceBtn.innerText = 'Add Source';
+        }
+      }
+
+      window.deleteSource = async (id) => {
+        const confirmed = await showConfirm('Are you sure you want to delete this source and all its indexed content?', 'Delete Source', true);
+        if (!confirmed) return;
+        try {
+          await fetch(`/api/sources/${id}`, { method: 'DELETE' });
+          loadSources();
+          showToast('Source deleted', 'success');
+        } catch (e) {
+          showToast('Failed to delete source', 'error');
+        }
+      };
+
+      async function loadSources() {
+        try {
+          const [srcRes, statusRes] = await Promise.all([
+            fetch('/api/sources?t=' + Date.now()),
+            fetch('/api/sources/status').catch(() => null)
+          ]);
+          const sources = await srcRes.json();
+          const statusMap = new Map();
+          if (statusRes && statusRes.ok) {
+            const statuses = await statusRes.json();
+            statuses.forEach(s => statusMap.set(s.id, s));
+          }
+
+          const list = document.getElementById('source-list');
+          list.innerHTML = '';
+          sources.forEach(s => {
+            const st = statusMap.get(s.id) || { status: 'idle', processed: 0 };
+            const badgeIcon = { idle: '○', queued: '⏲', indexing: '⏳', done: '✓', error: '⚠' }[st.status] || '○';
+            const badgeLabel = st.status === 'indexing'
+              ? `Indexing… (${st.processed} eps)`
+              : st.status === 'queued' ? 'Queued'
+                : st.status === 'done' ? 'Done'
+                  : st.status === 'error' ? 'Error'
+                    : 'Idle';
+            const li = document.createElement('li');
+            li.id = `source-row-${s.id}`;
+            li.innerHTML = `
+              <div class="info">
+                <span class="name">${s.name}</span>
+                <span class="link">${s.link}</span>
+              </div>
+              <div style="display:flex; gap:8px; align-items:center;">
+                 <span class="source-status-badge ${st.status}" id="badge-${s.id}">${badgeIcon} ${badgeLabel}</span>
+                 <button class="primary-btn" style="padding: 8px 16px; font-size:0.9rem;" onclick="refreshSource(${s.id})">Refresh</button>
+                 <button class="del-btn primary-btn" onclick="deleteSource(${s.id})">Delete</button>
+              </div>
+            `;
+            list.appendChild(li);
+          });
+        } catch (e) {
+          console.error(e);
+        }
+      }
+
+      window.refreshSource = async (id) => {
+        // Immediately update badge to show pending state
+        const badge = document.getElementById(`badge-${id}`);
+        if (badge) {
+          badge.className = 'source-status-badge indexing';
+          badge.textContent = '⏳ Starting…';
+        }
+        try {
+          const res = await fetch(`/api/sources/${id}/refresh`, { method: 'POST' });
+          if (res.ok) {
+            startIndexingPoll(true);
+          } else {
+            const data = await res.json().catch(() => ({}));
+            throw new Error(data.error || 'Server returned ' + res.status);
+          }
+        } catch (e) {
+          console.error('[Refresh Source Error]', e);
+          alert('Failed to refresh source: ' + e.message);
+          if (badge) { badge.className = 'source-status-badge error'; badge.textContent = '⚠ Error'; }
+        }
+      };
+
+      // --- Catalog ---
+      window.currentView = 'series'; // series, seasons, episodes
+      window.currentSeries = null;
+      window.currentSeason = null;
+
+      window.loadCatalog = async () => {
+        window.currentView = 'series';
+        window.currentSeries = null;
+        window.currentSeason = null;
+        updateBreadcrumb();
+        if (window.loadContinueWatching) window.loadContinueWatching();
+
+        const grid = document.getElementById('grid-container');
+        // Show skeleton first
+        grid.innerHTML = '';
+        for (let i = 0; i < 8; i++) {
+          grid.insertAdjacentHTML('beforeend', `
+            <div class="skeleton-card series-card">
+              <div class="skeleton sk-avatar"></div>
+              <div class="skeleton sk-title"></div>
+            </div>`);
+        }
+
+        try {
+          const res = await fetch('/api/catalog/series?t=' + Date.now());
+          if (res.status === 401) {
+            window.location.href = '/login.html?expired=1';
+            return;
+          }
+          const series = await res.json();
+          grid.innerHTML = '';
+          if (series.length === 0) {
+            grid.innerHTML = '<p style="color:#94a3b8; padding:0 8px;">No series found. Add a source in the Sources tab and wait for indexing.</p>';
+            return;
+          }
+          series.forEach(s => {
+            const card = document.createElement('div');
+            card.className = 'card series-card';
+            card.setAttribute('tabindex', '0');
+            card.addEventListener('keydown', e => { if (e.key === 'Enter') card.click(); });
+            let imgHtml = s.source_photo ? `<img src="${s.source_photo}" style="width:100px; height:100px; border-radius:50%; object-fit:cover; margin-bottom:16px; border:2px solid #334155; z-index:1;">` : `<div style="width:100px; height:100px; border-radius:50%; background:#3b82f6; display:flex; align-items:center; justify-content:center; font-size:2rem; font-weight:700; margin-bottom:16px; border:2px solid #334155; z-index:1;">${s.title[0]}</div>`;
+            card.innerHTML = `
+              <button class="fav-btn" onclick="event.stopPropagation(); toggleFavorite('series', ${s.id}, ${s.is_favorite})">${s.is_favorite ? '❤️' : '🤍'}</button>
+              ${imgHtml}<h3>${s.title}</h3>
+            `;
+            card.onclick = () => loadSeasons(s);
+            grid.appendChild(card);
+          });
+        } catch (e) { console.error(e); }
+      };
+
+      window.loadSeasons = async (series) => {
+        window.currentView = 'seasons';
+        window.currentSeries = series;
+        updateBreadcrumb();
+        if (window.loadContinueWatching) window.loadContinueWatching();
+
+        const grid = document.getElementById('grid-container');
+        // Show skeleton first
+        grid.innerHTML = '';
+        for (let i = 0; i < 4; i++) {
+          grid.insertAdjacentHTML('beforeend', `
+            <div class="skeleton-card season-card">
+              <div class="skeleton sk-title"></div>
+            </div>`);
+        }
+
+        try {
+          const res = await fetch(`/api/catalog/series/${series.id}/seasons`);
+          const seasons = await res.json();
+          grid.innerHTML = '';
+          seasons.forEach(s => {
+            if (s.season_number === 0 && s.episode_count === 0) return;
+            const card = document.createElement('div');
+            card.className = 'card season-card';
+            card.setAttribute('tabindex', '0');
+            card.addEventListener('keydown', e => { if (e.key === 'Enter') card.click(); });
+            card.innerHTML = `<h3>${s.season_number === 0 ? 'Unrecognized Episodes (Sort Manually)' : 'Season ' + s.season_number}</h3>`;
+            card.onclick = () => loadEpisodes(s);
+            grid.appendChild(card);
+          });
+        } catch (e) { console.error(e); }
+      };
+
+      window.loadEpisodes = async (season) => {
+        window.currentView = 'episodes';
+        window.currentSeason = season;
+        updateBreadcrumb();
+        if (window.loadContinueWatching) window.loadContinueWatching();
+
+        const grid = document.getElementById('grid-container');
+        // Show skeleton first
+        grid.innerHTML = '';
+        for (let i = 0; i < 6; i++) {
+          grid.insertAdjacentHTML('beforeend', `
+            <div class="skeleton-card episode-card">
+              <div class="skeleton sk-line short"></div>
+              <div class="skeleton sk-line long"></div>
+              <div class="skeleton sk-line" style="width:40%; margin-top:auto;"></div>
+            </div>`);
+        }
+
+        try {
+          const res = await fetch(`/api/catalog/seasons/${season.id}/episodes`);
+          const episodes = await res.json();
+          grid.innerHTML = '';
+
+          // Show Auto-sort button in Season 0 header
+          const existingAutoBar = document.getElementById('auto-sort-bar');
+          if (existingAutoBar) existingAutoBar.remove();
+
+          if (season.season_number === 0) {
+            const autoBar = document.createElement('div');
+            autoBar.id = 'auto-sort-bar';
+            autoBar.style.cssText = 'grid-column: 1 / -1; display: flex; align-items: center; gap: 12px; margin-bottom: 8px; padding: 12px 16px; background: #1e293b; border: 1px solid #334155; border-radius: 10px;';
+            autoBar.innerHTML = `
+              <div style="flex: 1;">
+                <p style="color:#e2e8f0; font-weight:600; font-size: 0.95rem; margin-bottom: 2px;">Auto-Sort Unrecognized Episodes</p>
+                <p style="color:#64748b; font-size:0.8rem;">Sort chronologically by Telegram order and infer season placement from surrounding known episodes.</p>
+              </div>
+              <button onclick="autoSortSeason()" style="background: linear-gradient(135deg,#3b82f6,#2563eb); border:none; color:white; padding: 10px 20px; border-radius:8px; font-size:0.9rem; font-weight:600; cursor:pointer; white-space:nowrap;">✨ Auto</button>
+            `;
+            grid.before(autoBar);
+          }
+          episodes.forEach(e => {
+            const card = document.createElement('div');
+            card.className = 'card episode-card';
+            card.style.position = 'relative';
+            card.setAttribute('tabindex', '0');
+            card.addEventListener('keydown', ev => { if (ev.key === 'Enter') card.querySelector('.episode-info').click(); });
+            const mbSize = (e.size / (1024 * 1024)).toFixed(1);
+
+            const formatT = (s) => { if (!s) return ''; const m = Math.floor(s / 60); const sc = Math.floor(s % 60); return `${m}:${sc < 10 ? '0' : ''}${sc}`; };
+            const progPct = Math.min(100, ((e.progress_seconds || 0) / (e.duration || 1)) * 100);
+            const watchedBadge = e.is_watched ? `<span style="color:#22c55e; font-size:0.75rem; margin-left:6px;">✅ Watched</span>` : '';
+            const pbHtml = (e.progress_seconds > 0 && !e.is_watched) ? `<div style="width:100%;height:4px;background:#334155;margin-top:8px;border-radius:2px;overflow:hidden;"><div style="width:${progPct}%;height:100%;background:#3b82f6;"></div></div><p style="font-size:0.75rem; color:#94a3b8; margin-top:4px;">${formatT((e.duration || 0) - e.progress_seconds)} left</p>` : '';
+
+            const isManual = e.is_manual === 1;
+            const isSeason0 = window.currentSeason.season_number === 0;
+            const badge = isManual ? `<span style="background: #eab308; color: #000; font-size: 0.65rem; padding: 2px 6px; border-radius: 4px; vertical-align: middle; margin-left: 6px;">Manual ✏️</span>` : '';
+            const undoBtn = isManual ? `<button onclick="undoAssign(${e.id})" style="background:#475569; border:none; color:white; padding:4px 8px; font-size:0.75rem; border-radius:4px; margin-top:8px; cursor:pointer;">Undo</button>` : '';
+            const assignBtn = (isSeason0 && !isManual)
+              ? `<button onclick="event.stopPropagation(); promptAssign(${e.id})" style="background:#3b82f6; border:none; color:white; padding:4px 8px; font-size:0.75rem; border-radius:4px; margin-top:8px; cursor:pointer;">Assign ✏️</button>`
+              : '';
+            card.innerHTML = `
+                <button class="fav-btn" onclick="event.stopPropagation(); toggleFavorite('episode', ${e.id}, ${e.is_favorite})">${e.is_favorite ? '❤️' : '🤍'}</button>
+                <div class="episode-info" style="cursor:pointer; width: 100%; height: 100%; display: flex; flex-direction: column;">
+                   <h4>Episode ${e.episode_number} ${badge} ${watchedBadge}</h4>
+                   <p class="truncate" title="${e.title}">${e.title}</p>
+                   <p style="margin-top:auto; padding-top:12px; font-size: 0.8rem; color:#64748b;">${mbSize} MB | ${formatT(e.duration)}</p>
+                   ${pbHtml}
+                </div>
+                <div class="episode-actions" style="display:flex; gap:8px; align-items:center; margin-top: 12px; position:relative; z-index:10;">
+                   ${assignBtn}${undoBtn}
+                </div>
+              `;
+            card.querySelector('.episode-info').onclick = (event) => {
+              playEpisode(e);
+            };
+            grid.appendChild(card);
+          });
+        } catch (e) { console.error(e); }
+      };
+
+      let currentAssignEpisodeId = null;
+      window.promptAssign = (episodeId) => {
+        currentAssignEpisodeId = episodeId;
+        document.getElementById('input-assign-season').value = '';
+        document.getElementById('input-assign-episode').value = '';
+        document.getElementById('assign-episode-modal').style.display = 'flex';
+      };
+
+      document.getElementById('btns-cancel-assign').onclick = () => {
+        document.getElementById('assign-episode-modal').style.display = 'none';
+      };
+
+      document.getElementById('btn-submit-assign').onclick = () => {
+        const seasonNum = document.getElementById('input-assign-season').value;
+        const epNum = document.getElementById('input-assign-episode').value;
+        if (!seasonNum || !epNum) {
+          showToast('Please enter both Season and Episode', 'error');
+          return;
+        }
+
+        fetch(`/api/catalog/episodes/${currentAssignEpisodeId}/assign`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            seriesId: window.currentSeries.id,
+            seasonNumber: parseInt(seasonNum),
+            episodeNumber: parseInt(epNum)
+          })
+        }).then(res => res.json()).then(data => {
+          if (data.success) {
+            document.getElementById('assign-episode-modal').style.display = 'none';
+            window.loadEpisodes(window.currentSeason);
+            showToast('Episode assigned!', 'success');
+          } else {
+            showToast('Failed to assign episode', 'error');
+          }
+        });
+      };
+
+      window.undoAssign = async (episodeId) => {
+        const confirmed = await showConfirm('Undo manual assignment and return to original season?', 'Undo Assignment');
+        if (!confirmed) return;
+        fetch(`/api/catalog/episodes/${episodeId}/reset`, { method: 'POST' })
+          .then(res => res.json())
+          .then(data => {
+            if (data.success) {
+              window.loadEpisodes(window.currentSeason);
+              showToast('Assignment restored', 'success');
+            } else {
+              showToast('Failed to undo: ' + (data.error || 'Unknown error'), 'error');
+            }
+          })
+          .catch(err => {
+            console.error('Fetch error in Undo:', err);
+            showToast('Network error in Undo', 'error');
+          });
+      };
+
+      window.autoSortSeason = async () => {
+        const seasonId = window.currentSeason.id;
+        const btn = document.querySelector('#auto-sort-bar button');
+        if (btn) { btn.textContent = 'Running...'; btn.disabled = true; }
+        try {
+          const res = await fetch(`/api/catalog/seasons/${seasonId}/auto-sort`, { method: 'POST' });
+          const data = await res.json();
+          if (data.success) {
+            if (data.assigned === 0) {
+              showToast('No episodes could be auto-assigned. Make sure there are known episodes to use as anchors.', 'info');
+            } else {
+              showToast(`✅ Auto-sorted ${data.assigned} episode(s)!`, 'success');
+              window.loadSeasons(window.currentSeries);
+            }
+          } else {
+            showToast('Auto-sort failed: ' + (data.error || 'Unknown error'), 'error');
+          }
+        } catch (e) {
+          showToast('Request failed: ' + e.message, 'error');
+        } finally {
+          if (btn) { btn.textContent = '✨ Auto'; btn.disabled = false; }
+        }
+      };
+
+
+      function updateBreadcrumb() {
+        const b = document.getElementById('breadcrumb');
+        let html = `<span onclick="loadCatalog()" style="cursor:pointer;">Series</span>`;
+        if (window.currentView === 'seasons' || window.currentView === 'episodes') {
+          html += `<span class="chevron">/</span><span onclick="loadSeasons(window.currentSeries)" style="cursor:pointer; color: #e2e8f0;">${window.currentSeries.title}</span>`;
+        }
+        if (window.currentView === 'episodes') {
+          const seasonName = window.currentSeason.season_number === 0 ? 'Unrecognized Episodes (Sort Manually)' : 'Season ' + window.currentSeason.season_number;
+          html += `<span class="chevron">/</span><span style="color:#e2e8f0;">${seasonName}</span>`;
+        }
+        b.innerHTML = html;
+      }
+
+      let currentPlayingEp = null;
+      window.playEpisode = (ep) => {
+        currentPlayingEp = ep;
+        autoNextActive = false;
+        clearInterval(autoNextTimer);
+        document.getElementById('auto-next-overlay').style.display = 'none';
+
+        const modal = document.getElementById('player-modal');
+        const video = document.getElementById('mainVideo');
+        document.getElementById('player-title').innerText = `Episode ${ep.episode_number}: ${ep.title}`;
+        modal.style.display = 'flex';
+        video.src = `/api/stream/${ep.channel}/${ep.message_id}`;
+
+        video.onloadedmetadata = () => {
+          if (ep.progress_seconds > 0 && !ep.is_watched) {
+            video.currentTime = ep.progress_seconds;
+          }
+          video.play().catch(e => console.warn('Autoplay prevented', e));
+        };
+      };
+
+      window.playAndNavigateToEpisode = async (ep) => {
+        // Switch to catalog
+        ['catalog', 'favorites', 'sources', 'settings'].forEach(v => {
+          const el = document.getElementById(`view-${v}`);
+          if (el) el.style.display = 'catalog' === v ? 'flex' : 'none';
+          const nav = document.getElementById(`nav-${v}`);
+          if (nav) nav.className = 'catalog' === v ? 'active' : '';
+        });
+
+        const seriesMock = { id: ep.series_id, title: ep.series_title };
+        const seasonMock = { id: ep.season_id, season_number: ep.season_number };
+
+        window.currentSeries = seriesMock;
+        window.currentSeason = seasonMock;
+
+        // Let the background load the layout
+        window.loadEpisodes(seasonMock);
+
+        playEpisode(ep);
+      };
+
+      async function syncProgressNow(forceWatched = false) {
+        const video = document.getElementById('mainVideo');
+        if (!currentPlayingEp || !video) return;
+        if (video.currentTime > 5 || forceWatched) {
+          try {
+            await fetch(`/api/progress/${currentPlayingEp.id}`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ progress_seconds: video.currentTime, duration: video.duration || currentPlayingEp.duration || 1, force_watched: forceWatched })
+            });
+          } catch (e) { }
+        }
+      }
+
+      document.getElementById('close-player').onclick = async () => {
+        document.getElementById('player-modal').style.display = 'none';
+        const video = document.getElementById('mainVideo');
+        video.pause();
+
+        await syncProgressNow();
+
+        video.removeAttribute('src');
+
+        if (window.currentView === 'episodes' && window.currentSeason) {
+          loadEpisodes(window.currentSeason);
+        } else if (window.currentView === 'catalog' && window.loadContinueWatching) {
+          loadContinueWatching();
+        } else if (window.currentView === 'favorites' && window.loadFavorites) {
+          loadFavorites();
+        }
+      };
+
+      // ---- NEW FEATURES JS ----
+      window.toggleFavorite = async (type, id, currentState) => {
+        const btn = event.currentTarget || event.target;
+        if (btn) btn.style.pointerEvents = 'none'; // prevent double clicks
+
+        if (currentState) {
+          await fetch(`/api/favorites/${type}/${id}`, { method: 'DELETE' });
+        } else {
+          await fetch(`/api/favorites`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ item_type: type, item_id: id }) });
+        }
+
+        // Refresh based on what's currently visible
+        if (document.getElementById('view-catalog').style.display === 'flex' || document.getElementById('view-catalog').style.display === '') {
+          if (window.currentView === 'series' || !window.currentView) loadCatalog();
+          else if (window.currentView === 'seasons') loadSeasons(window.currentSeries);
+          else if (window.currentView === 'episodes') loadEpisodes(window.currentSeason);
+        } else if (document.getElementById('view-favorites').style.display === 'flex') {
+          loadFavorites();
+        }
+      };
+
+      window.loadFavorites = async () => {
+        try {
+          const res = await fetch('/api/favorites/details');
+          const data = await res.json();
+          const target = document.getElementById('view-favorites');
+          target.innerHTML = '<h2 style="margin-bottom: 24px;">Your Favorites</h2>';
+
+          if (data.series && data.series.length > 0) {
+            const h3 = document.createElement('h3'); h3.style.marginBottom = '16px'; h3.innerText = 'Series';
+            target.appendChild(h3);
+            const sGrid = document.createElement('div'); sGrid.className = 'grid-container'; sGrid.style.marginBottom = '32px';
+            data.series.forEach(item => {
+              const card = document.createElement('div');
+              card.className = `card series-card`;
+              let imgHtml = item.source_photo ? `<img src="${item.source_photo}" style="width:100px; height:100px; border-radius:50%; object-fit:cover; margin-bottom:16px; border:2px solid #334155; z-index:1;">` : `<div style="width:100px; height:100px; border-radius:50%; background:#3b82f6; display:flex; align-items:center; justify-content:center; font-size:2rem; font-weight:700; margin-bottom:16px; border:2px solid #334155; z-index:1;">${item.title[0]}</div>`;
+              card.innerHTML = `<button class="fav-btn" onclick="event.stopPropagation(); toggleFavorite('series', ${item.id}, true)">❤️</button>${imgHtml}<h3>${item.title}</h3>`;
+              card.onclick = () => { loadSeasons(item); showView('catalog'); };
+              sGrid.appendChild(card);
+            });
+            target.appendChild(sGrid);
+          }
+          if (data.episodes && data.episodes.length > 0) {
+            const h3 = document.createElement('h3'); h3.style.marginBottom = '16px'; h3.innerText = 'Episodes';
+            target.appendChild(h3);
+            const eGrid = document.createElement('div'); eGrid.className = 'grid-container'; eGrid.style.marginBottom = '32px';
+            data.episodes.forEach(item => {
+              const card = document.createElement('div');
+              card.className = `card episode-card`;
+              card.innerHTML = `<button class="fav-btn" onclick="event.stopPropagation(); toggleFavorite('episode', ${item.id}, true)">❤️</button>
+                <div class="episode-info" style="width:100%;">
+                   <h4>${item.series_title} - S${item.season_number} E${item.episode_number}</h4>
+                   <p class="truncate">${item.title}</p>
+                </div>`;
+              card.onclick = () => window.playAndNavigateToEpisode(item);
+              eGrid.appendChild(card);
+            });
+            target.appendChild(eGrid);
+          }
+          if ((!data.series || data.series.length === 0) && (!data.episodes || data.episodes.length === 0)) {
+            target.innerHTML += '<p style="color:#94a3b8;">No favorites yet.</p>';
+          }
+        } catch (e) { console.error(e); }
+      };
+
+      window.removeFromContinueWatching = async (episodeId) => {
+        const confirmed = await showConfirm('Remove from Continue Watching list?', 'Remove Item');
+        if (!confirmed) return;
+        try {
+          await fetch(`/api/progress/${episodeId}`, { method: 'DELETE' });
+          loadContinueWatching();
+          if (window.currentView === 'episodes' && window.currentSeason) loadEpisodes(window.currentSeason);
+        } catch (e) { }
+      };
+
+      window.loadContinueWatching = async () => {
+        try {
+          const res = await fetch('/api/progress/continue');
+          let data = await res.json();
+          const grid = document.getElementById('continue-watching-grid');
+          const sec = document.getElementById('continue-watching-section');
+
+          if (window.currentView === 'seasons' || window.currentView === 'episodes') {
+            if (window.currentSeries) {
+              data = data.filter(e => e.series_id === window.currentSeries.id);
+            }
+          }
+
+          grid.innerHTML = '';
+          if (data.length === 0) { sec.style.display = 'none'; return; }
+          sec.style.display = 'block';
+          data.forEach(e => {
+            const card = document.createElement('div');
+            card.className = 'card episode-card';
+            card.style.position = 'relative';
+            card.setAttribute('tabindex', '0');
+            card.addEventListener('keydown', ev => { if (ev.key === 'Enter') card.click(); });
+            const progPct = Math.min(100, (e.progress_seconds / (e.duration || 1)) * 100);
+            const pbHtml = `<div style="width:100%;height:4px;background:#334155;margin-top:8px;border-radius:2px;overflow:hidden;"><div style="width:${progPct}%;height:100%;background:#3b82f6;"></div></div>`;
+            card.innerHTML = `
+                <button onclick="event.stopPropagation(); removeFromContinueWatching(${e.id})" style="position:absolute; top:8px; right:8px; background:rgba(15,23,42,0.8); border:none; color:#94a3b8; width:28px; height:28px; border-radius:50%; font-size:1.1rem; cursor:pointer; z-index:20; display:flex; align-items:center; justify-content:center; transition: background 0.2s;" onmouseover="this.style.background='rgba(15,23,42,1)'; this.style.color='#f8fafc';" onmouseout="this.style.background='rgba(15,23,42,0.8)'; this.style.color='#94a3b8';">&times;</button>
+                <div class="episode-info" style="width:100%;">
+                   <h4>${e.series_title} - E${e.episode_number}</h4>
+                   <p class="truncate">${e.title}</p>
+                   ${pbHtml}
+                </div>`;
+            card.onclick = () => window.playAndNavigateToEpisode(e);
+            grid.appendChild(card);
+          });
+        } catch (e) { console.error(e); }
+      };
+
+      let currentSettings = { auto_next_enabled: 1, auto_next_countdown: 15 };
+      fetch('/api/settings').then(r => r.json()).then(d => {
+        currentSettings = d;
+        document.getElementById('setting-auto-next').checked = (d.auto_next_enabled === 1);
+        document.getElementById('setting-countdown').value = d.auto_next_countdown;
+      });
+
+      document.getElementById('btn-save-settings').onclick = async () => {
+        const btn = document.getElementById('btn-save-settings');
+        btn.innerText = 'Saving...';
+        currentSettings.auto_next_enabled = document.getElementById('setting-auto-next').checked ? 1 : 0;
+        currentSettings.auto_next_countdown = parseInt(document.getElementById('setting-countdown').value) || 15;
+        await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(currentSettings) });
+        btn.innerText = 'Saved!';
+        setTimeout(() => btn.innerText = 'Save Settings', 2000);
+      };
+
+      let progressDebounce = null;
+      let autoNextActive = false;
+      let autoNextTimer = null;
+      let autoNextSecondsLeft = 0;
+      const mainVideo = document.getElementById('mainVideo');
+
+      mainVideo.addEventListener('timeupdate', () => {
+        if (!currentPlayingEp) return;
+
+        // Progress Sync
+        if (!progressDebounce && mainVideo.currentTime > 5) {
+          progressDebounce = setTimeout(() => {
+            syncProgressNow(false).then(() => {
+              if (document.getElementById('view-catalog').style.display !== 'none' && window.loadContinueWatching) loadContinueWatching();
+            });
+            progressDebounce = null;
+          }, 10000); // 10s debounce
+        }
+
+        // Auto Next Logic
+        if (currentSettings.auto_next_enabled === 1 && !autoNextActive && mainVideo.duration > 0) {
+          const timeLeft = mainVideo.duration - mainVideo.currentTime;
+          if (timeLeft <= currentSettings.auto_next_countdown && timeLeft > 0) {
+            startAutoNext(Math.ceil(timeLeft));
+          }
+        }
+      });
+
+      function startAutoNext(seconds) {
+        autoNextActive = true;
+        autoNextSecondsLeft = seconds;
+        document.getElementById('auto-next-overlay').style.display = 'flex';
+        document.getElementById('auto-next-countdown').innerText = autoNextSecondsLeft;
+
+        autoNextTimer = setInterval(() => {
+          autoNextSecondsLeft--;
+          if (autoNextSecondsLeft <= 0) {
+            clearInterval(autoNextTimer);
+            playNextEpisodeAction();
+          } else {
+            document.getElementById('auto-next-countdown').innerText = autoNextSecondsLeft;
+          }
+        }, 1000);
+      }
+
+      document.getElementById('btn-play-next').onclick = () => {
+        clearInterval(autoNextTimer);
+        playNextEpisodeAction();
+      };
+
+      document.getElementById('btn-cancel-next').onclick = () => {
+        clearInterval(autoNextTimer);
+        document.getElementById('auto-next-overlay').style.display = 'none';
+        currentSettings.auto_next_enabled = 0; // Temp disable for this playback
+      };
+
+      async function playNextEpisodeAction() {
+        document.getElementById('auto-next-overlay').style.display = 'none';
+        try {
+          await syncProgressNow(true);
+          const res = await fetch(`/api/catalog/seasons/${currentPlayingEp.season_id}/episodes`);
+          const eps = await res.json();
+          const idx = eps.findIndex(e => e.id === currentPlayingEp.id);
+          if (idx >= 0 && idx < eps.length - 1) {
+            playEpisode(eps[idx + 1]);
+          } else {
+            document.getElementById('close-player').click();
+          }
+        } catch (e) {
+          document.getElementById('close-player').click();
+        }
+      }
+
+      // Initial load
+      showView('catalog');
+
+      // ── Indexing Status Poll ─────────────────────────────────────────────
+      let indexStatusInterval = null;
+      let prevStatuses = new Map(); // sourceId -> last known status string
+
+      async function pollIndexingStatus() {
+        try {
+          const res = await fetch('/api/sources/status');
+          if (!res.ok) return;
+          const statuses = await res.json();
+
+          const stillIndexing = statuses.filter(s => s.status === 'indexing' || s.status === 'queued');
+
+          // Detect transitions to 'done' or 'error'
+          const nowFinished = statuses.filter(s => {
+            const current = s.status;
+            const prev = prevStatuses.get(s.id);
+            // If it was indexing/queued and now it's done/error
+            return (current === 'done' || current === 'error') && (prev === 'indexing' || prev === 'queued');
+          });
+
+          // Update indexing pill on catalog
+          const pill = document.getElementById('indexing-pill');
+          const pillText = document.getElementById('indexing-pill-text');
+          const catalogVisible = document.getElementById('view-catalog').style.display !== 'none';
+          if (pill && catalogVisible) {
+            if (stillIndexing.length > 0) {
+              const count = stillIndexing.length;
+              pillText.textContent = `Indexing ${count} source${count > 1 ? 's' : ''}…`;
+              pill.style.display = 'flex';
+            } else {
+              pill.style.display = 'none';
+            }
+          }
+
+          // Update badges in Sources view if open
+          statuses.forEach(s => {
+            const badge = document.getElementById(`badge-${s.id}`);
+            if (!badge) return;
+            const badgeIcon = { idle: '○', queued: '⏲', indexing: '⏳', done: '✓', error: '⚠' }[s.status] || '○';
+            const badgeLabel = s.status === 'indexing'
+              ? `Indexing… (${s.processed} eps)`
+              : s.status === 'queued' ? 'Queued'
+                : s.status === 'done' ? 'Done'
+                  : s.status === 'error' ? 'Error'
+                    : 'Idle';
+            badge.className = `source-status-badge ${s.status}`;
+            badge.textContent = `${badgeIcon} ${badgeLabel}`;
+          });
+
+          // Snapshot current statuses for next comparison
+          statuses.forEach(s => prevStatuses.set(s.id, s.status));
+
+          // If any source just finished, silently refresh catalog if visible on series view
+          if (nowFinished.length > 0 && catalogVisible && window.currentView === 'series') {
+            loadCatalog();
+          }
+
+          // Stop polling only if nothing is indexing AND neither catalog nor sources is visible
+          const sourcesVisible = document.getElementById('view-sources').style.display !== 'none';
+          if (stillIndexing.length === 0 && !sourcesVisible && !catalogVisible) {
+            clearInterval(indexStatusInterval);
+            indexStatusInterval = null;
+          }
+        } catch (e) { console.error('[Poll Error]', e); }
+      }
+
+      function startIndexingPoll(force = false) {
+        if (force) {
+          clearInterval(indexStatusInterval);
+          indexStatusInterval = null;
+        }
+        if (indexStatusInterval) return;
+        indexStatusInterval = setInterval(pollIndexingStatus, 1000); // 1s interval
+        pollIndexingStatus();
+      }
+
+
+      // --- Mobile Share SSE Logic ---
+      const sharePhoneBtn = document.getElementById('sharePhoneBtn');
+      const shareModal = document.getElementById('shareModal');
+      const shareCloseModal = document.getElementById('closeModal');
+      let shareQrGenerated = false;
+      let shareSseSource = null;
+
+      if (sharePhoneBtn) {
+        sharePhoneBtn.addEventListener('click', async () => {
+          shareModal.style.display = 'flex';
+
+          if (!shareQrGenerated) {
+            let externalHost = window.location.origin;
+            try {
+              const res = await fetch('/api/ip');
+              const data = await res.json();
+              if (data.ip && data.ip !== 'localhost') {
+                externalHost = `http://${data.ip}:${data.port}`;
+              }
+            } catch (e) {
+              console.warn('Failed to fetch local IP, using localhost fallback');
+            }
+
+            const token = Math.random().toString(36).substring(2, 10);
+            const url = `${externalHost}/share.html?token=${token}`;
+
+            new QRCode(document.getElementById("shareQr"), {
+              text: url, width: 180, height: 180,
+              colorDark: "#000000", colorLight: "#ffffff"
+            });
+            shareQrGenerated = true;
+
+            shareSseSource = new EventSource(`/api/share/listen?token=${token}`);
+            shareSseSource.onmessage = (e) => {
+              const data = JSON.parse(e.data);
+              if (data.link) {
+                shareModal.style.display = 'none';
+                document.getElementById('sourceLink').value = data.link;
+                document.getElementById('sourceName').focus();
+              }
+            };
+          }
+        });
+
+        if (shareCloseModal) shareCloseModal.addEventListener('click', () => {
+          shareModal.style.display = 'none';
+        });
+      }
+
+
+
+    });
+  </script>
+  <!-- Updater -->
+  <script src="/js/updater.js"></script>
+  <script>
+    document.addEventListener('DOMContentLoaded', () => {
+      if (window.AppUpdater) window.AppUpdater.checkOnLaunch();
+    });
+  </script>
+  <!-- Toasts & Modals -->
+  <div id="toast-container"></div>
+
+  <div id="custom-confirm-modal" class="custom-modal-overlay">
+    <div class="custom-modal-content">
+      <h2 id="confirm-title">Are you sure?</h2>
+      <p id="confirm-msg"></p>
+      <div class="custom-modal-btns">
+        <button id="confirm-cancel" class="modal-btn cancel">Cancel</button>
+        <button id="confirm-ok" class="modal-btn confirm">Confirm</button>
+      </div>
+    </div>
+  </div>
+</body>
+
+</html>

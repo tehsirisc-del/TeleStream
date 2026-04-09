@@ -1,0 +1,10 @@
+{
+  "appId": "com.telestream.tv",
+  "appName": "TeleStream",
+  "webDir": "www",
+  "server": {
+    "cleartext": true,
+    "androidScheme": "http",
+    "allowNavigation": ["*"]
+  }
+}
