@@ -478,14 +478,23 @@ async function loadContinueWatching() {
     const row = document.getElementById('cw-row');
     if (data.length === 0) { sec.style.display = 'none'; return; }
     sec.style.display = 'block';
-    row.innerHTML = '';
+
+    const focusedId = document.activeElement?.dataset.episodeId;
+    const existingCards = new Map([...row.children].map(c => [c.dataset.episodeId, c]));
+    const newItems = [];
+
     data.forEach(e => {
-      // Use discovered real duration (progress_duration) if Telegram metadata (duration) is 0
       const d = (e.progress_duration > 60) ? e.progress_duration : (e.duration || 1);
       const pct = Math.min(100, (e.progress_seconds / d) * 100);
-      const card = document.createElement('div');
-      card.className = 'card episode-card focusable';
-      card.tabIndex = 0;
+      
+      let card = existingCards.get(String(e.id));
+      if (!card) {
+          card = document.createElement('div');
+          card.className = 'card episode-card focusable';
+          card.tabIndex = 0;
+          card.dataset.episodeId = e.id;
+      }
+      
       card.innerHTML = `
         <button onclick="event.stopPropagation();removeCW(${e.id})" class="focusable"
           style="position:absolute;top:8px;right:8px;background:rgba(15,23,42,0.8);border:none;color:#94a3b8;
@@ -498,8 +507,16 @@ async function loadContinueWatching() {
           <span style="font-size:0.75rem;color:#94a3b8;margin-top:5px;display:block;">${d > 0 ? (formatTime(Math.max(0, d - e.progress_seconds)) + ' left') : ''}</span>
         </div>`;
       card.onclick = () => playEpisode(e);
-      row.appendChild(card);
+      newItems.push(card);
     });
+
+    row.innerHTML = '';
+    newItems.forEach(item => row.appendChild(item));
+
+    if (focusedId) {
+        const toFocus = row.querySelector(`[data-episode-id="${focusedId}"]`);
+        if (toFocus) toFocus.focus();
+    }
   } catch(ex) { console.error(ex); }
 }
 
