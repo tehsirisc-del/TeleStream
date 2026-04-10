@@ -58,17 +58,39 @@
 <!-- ── Main App Shell ──────────────────────────────── -->
 <div id="app" style="display:none;">
 
-  <!-- Top Notification Area -->
-  <div id="top-notif-container" data-nav-zone="notif" style="display:none; justify-content:center; padding-top: 10px; pointer-events:none;">
-    <div class="tab-item-update focusable" id="tab-update" tabindex="0" style="pointer-events: auto;">✨ Update Available</div>
-  </div>
-
-  <!-- Tab Bar -->
+  <!-- Left Sidebar Navigation -->
   <div id="tab-bar" data-nav-zone="tabs">
-    <div class="tab-item active focusable" id="tab-catalog" tabindex="0"><span class="tab-icon">📺</span> Catalog</div>
-    <div class="tab-item focusable" id="tab-favorites" tabindex="0"><span class="tab-icon">❤️</span> Favorites</div>
-    <div class="tab-item focusable" id="tab-sources" tabindex="0"><span class="tab-icon">➕</span> Sources</div>
-    <div class="tab-item focusable" id="tab-settings" tabindex="0"><span class="tab-icon">⚙️</span> Settings</div>
+    <!-- Brand -->
+    <div id="sidebar-brand">
+      <span class="brand-icon">🎬</span>
+      <span class="brand-name">TeleStream</span>
+    </div>
+
+    <!-- Nav Items -->
+    <div class="tab-item active focusable" id="tab-catalog" tabindex="0">
+      <span class="tab-icon">📺</span>
+      <span class="tab-label">Catalog</span>
+    </div>
+    <div class="tab-item focusable" id="tab-favorites" tabindex="0">
+      <span class="tab-icon">❤️</span>
+      <span class="tab-label">Favorites</span>
+    </div>
+    <div class="tab-item focusable" id="tab-sources" tabindex="0">
+      <span class="tab-icon">📡</span>
+      <span class="tab-label">Sources</span>
+    </div>
+    <div class="tab-item focusable" id="tab-settings" tabindex="0">
+      <span class="tab-icon">⚙️</span>
+      <span class="tab-label">Settings</span>
+    </div>
+
+    <!-- Spacer -->
+    <div id="sidebar-spacer"></div>
+
+    <!-- Update Notification -->
+    <div id="top-notif-container" data-nav-zone="notif" style="display:none;">
+      <div class="tab-item-update focusable" id="tab-update" tabindex="0">✨ Update</div>
+    </div>
   </div>
 
   <!-- Content Area -->
@@ -99,33 +121,29 @@
 
     <!-- ── SOURCES VIEW ─────────────────────────────── -->
     <div class="view" id="view-sources">
-      <div style="font-size:1.5rem;font-weight:700;margin-bottom:20px;">Manage Sources</div>
-      <div style="display:flex;gap:12px;margin-bottom:16px;flex-wrap:wrap;">
-        <input type="text" id="source-name-input" class="styled-input" placeholder="Source Name (optional)" tabindex="0" style="flex:1;" readonly>
-        <div class="input-group" style="flex:2;">
-          <span class="input-prefix">https://t.me/</span>
-          <input type="text" id="source-link-input" class="styled-input" placeholder="ChannelID" tabindex="0" readonly>
+      <div class="sources-page">
+        <div class="sources-header">
+          <h2>📡 Sources</h2>
+          <button class="source-add-btn btn focusable" id="add-source-btn" tabindex="0">
+            ➕ Add Source
+          </button>
         </div>
-        <button class="btn btn-primary focusable" id="add-source-btn" tabindex="0">Add Source</button>
+        <div class="sources-list" id="source-list"></div>
       </div>
-      <button class="btn btn-primary focusable" id="share-phone-btn" tabindex="0"
-        style="background:#0ea5e9;margin-bottom:16px;width:100%;">
-        📱 Share Link from Phone
-      </button>
-      <div class="scrollable" id="source-list"></div>
     </div>
 
     <!-- ── SETTINGS VIEW ────────────────────────────── -->
     <div class="view" id="view-settings">
-      <div style="font-size:1.5rem;font-weight:700;margin-bottom:20px;">Settings</div>
-      
-      <div class="settings-list">
-        <div class="settings-row focusable" tabindex="0">
+      <div class="settings-page">
+
+        <div class="settings-section-title">Playback</div>
+
+        <div class="settings-row focusable" tabindex="0" id="autonext-row">
           <div class="settings-label">
             <h4>Auto Next Episode</h4>
             <p>Automatically play the next episode when current ends.</p>
           </div>
-          <label class="switch">
+          <label class="switch" onclick="event.stopPropagation()">
             <input type="checkbox" id="setting-auto-next" onchange="autoSaveSettings()">
             <span class="slider"></span>
           </label>
@@ -134,17 +152,9 @@
         <div class="settings-row focusable" tabindex="0" id="countdown-row-wrapper">
           <div class="settings-label" id="countdown-label">
             <h4>Countdown Duration</h4>
-            <p>Wait time before auto-playing (seconds)</p>
+            <p>Wait time before auto-playing the next episode (seconds)</p>
           </div>
-          <input type="number" id="setting-countdown" class="styled-input focusable" min="1" max="60" tabindex="0" style="width:100px; text-align:center; padding: 10px;" onchange="autoSaveSettings()" readonly>
-        </div>
-
-        <div class="settings-row focusable" tabindex="0" id="zoom-row" onclick="openZoomModal()">
-          <div class="settings-label">
-            <h4>Interface Zoom</h4>
-            <p>Adjust the overall size of the UI</p>
-          </div>
-          <div id="zoom-val" style="font-weight:700; color:var(--accent); font-size:1.1rem;" data-zoom="100">100%</div>
+          <input type="number" id="setting-countdown" class="styled-input focusable" min="1" max="60" tabindex="0" style="width:90px; text-align:center; padding:10px; background:#1e293b;" onchange="autoSaveSettings()" readonly>
         </div>
 
         <div class="settings-row focusable" tabindex="0" id="setting-seek-step-row">
@@ -152,7 +162,7 @@
             <h4>Seek Interval</h4>
             <p>Seconds to skip forward/back with remote keys.</p>
           </div>
-          <select id="setting-seek-step" class="styled-input focusable" tabindex="0" style="width:100px; background:#1e293b; color:white; border:none;" onchange="autoSaveSettings()">
+          <select id="setting-seek-step" class="styled-input focusable" tabindex="0" style="width:90px; background:#1e293b; color:white; border:none; text-align:center;" onchange="autoSaveSettings()">
             <option value="5">5s</option>
             <option value="10">10s</option>
             <option value="15" selected>15s</option>
@@ -161,26 +171,39 @@
           </select>
         </div>
 
+        <div class="settings-section-title">Display</div>
+
+        <div class="settings-row focusable" tabindex="0" id="zoom-row" onclick="openZoomModal()">
+          <div class="settings-label">
+            <h4>Interface Zoom</h4>
+            <p>Adjust the overall size of the UI to match your TV screen distance.</p>
+          </div>
+          <div class="settings-value" id="zoom-val" data-zoom="100">100%</div>
+        </div>
+
+        <div class="settings-section-title">System</div>
+
         <div class="settings-row focusable" tabindex="0" id="update-row" onclick="if(window.AppUpdater) window.AppUpdater.checkForUpdatesManual()">
           <div class="settings-label">
             <h4>Check for Updates</h4>
-            <p id="update-status-text">Check if a new version is available on GitHub.</p>
+            <p id="update-status-text">Check if a new version of TeleStream is available on GitHub.</p>
           </div>
-          <div id="update-badge" style="font-weight:700; color:#38bdf8; font-size:1.1rem; display:none;">New Available!</div>
+          <div id="update-badge" style="font-weight:700; color:#38bdf8; font-size:1rem; display:none;">New!</div>
         </div>
-      </div>
-      
-      <div style="margin-top:40px; border-top:1px solid rgba(255,255,255,0.1); padding-top:20px;">
-        <button class="btn btn-danger focusable" id="logout-btn" tabindex="0" style="width:100%; display:flex; align-items:center; justify-content:center; gap:12px; height:60px; font-size:1.2rem;" onclick="handleLogout()">
-          <span>🚪</span> Logout from Telegram
-        </button>
-        <p style="text-align:center; color:#94a3b8; font-size:0.9rem; margin-top:12px;">
-          This will clear your session and all locally cached data.
-        </p>
 
-        <p style="text-align:center; color:#64748b; font-size:0.85rem; margin-top:40px; margin-bottom: 20px;" id="app-footer">
-          App Version: <span id="app-version-display">v1.0.1 (Official Release)</span>
-        </p>
+        <!-- Danger Zone -->
+        <div class="settings-danger-zone">
+          <p style="color:var(--text-secondary); font-size:0.88rem;">This will clear your Telegram session and all locally cached data.</p>
+          <button class="btn btn-danger focusable" id="logout-btn" tabindex="0"
+            style="display:flex; align-items:center; gap:12px; height:58px; font-size:1.05rem; padding:0 32px;"
+            onclick="handleLogout()">
+            <span>🚪</span> Logout from Telegram
+          </button>
+          <p style="color:#64748b; font-size:0.82rem; margin-top:12px;">
+            App Version: <span id="app-version-display">v1.1.0</span>
+          </p>
+        </div>
+
       </div>
     </div>
 
@@ -235,14 +258,31 @@
 
 <!-- ── Add Source Modal ───────────────────────────────── -->
 <div id="add-source-modal" class="modal-overlay">
-  <div class="modal-box" style="text-align:center;">
-    <h2>Source Configuration</h2>
-    <p>Does this Telegram channel contain a <b>single</b> TV series, or <b>multiple</b> different series?</p>
-    <div class="modal-btns" style="justify-content:center;gap:16px;">
-      <button class="btn btn-primary focusable"   id="btn-single-series" tabindex="0">Single Series</button>
-      <button class="btn btn-secondary focusable" id="btn-multi-series"  tabindex="0">Multiple</button>
+  <div class="modal-box" style="max-width:560px;">
+    <h2>📡 Add New Source</h2>
+    <p>Enter the Telegram channel to add as a content source.</p>
+    <div class="add-source-form">
+      <div class="form-row">
+        <label>Source Name (optional)</label>
+        <input type="text" id="source-name-input" class="styled-input focusable" placeholder="e.g. Breaking Bad" tabindex="0" readonly>
+      </div>
+      <div class="form-row">
+        <label>Telegram Channel</label>
+        <div class="input-group">
+          <span class="input-prefix">t.me/</span>
+          <input type="text" id="source-link-input" class="styled-input" placeholder="channel_id" tabindex="0" readonly>
+        </div>
+      </div>
+      <div class="modal-btns" style="justify-content:center;gap:12px;margin-top:8px;">
+        <button class="btn btn-primary focusable"   id="btn-single-series" tabindex="0">🎥 Single Series</button>
+        <button class="btn btn-secondary focusable" id="btn-multi-series"  tabindex="0">📺 Multiple Series</button>
+      </div>
+      <button class="btn btn-primary focusable" id="share-phone-btn" tabindex="0"
+        style="background:#0ea5e9;width:100%;margin-top:4px;">
+        📱 Share Link from Phone
+      </button>
+      <button class="btn btn-secondary focusable" id="cancel-source-modal" tabindex="0" style="width:100%;">Cancel</button>
     </div>
-    <button class="btn btn-secondary focusable" id="cancel-source-modal" tabindex="0" style="width:100%;margin-top:12px;">Cancel</button>
   </div>
 </div>
 
@@ -304,7 +344,7 @@
 <!-- ─────────────────── MAIN APP SCRIPT ─────────────────────────────── -->
 <script>
 // ── State ───────────────────────────────────────────────────────────────
-let currentView = 'catalog';
+let currentView = null;
 let catalogView = 'series'; // 'series', 'seasons', 'episodes'
 let currentSeries = null;
 let currentSeason = null;
@@ -439,7 +479,17 @@ function handleBack() {
     if (catalogView === 'seasons')  { loadCatalogSeries(); return; }
   }
   
-  // If at root, exit app
+  // If at root (no more breadcrumbs), check if we should focus sidebar or exit
+  const activeZone = document.activeElement.closest('[data-nav-zone]')?.getAttribute('data-nav-zone');
+  if (activeZone !== 'tabs' && activeZone !== 'notif') {
+    const activeTab = document.querySelector('#tab-bar .tab-item.active');
+    if (activeTab) {
+      activeTab.focus();
+      return;
+    }
+  }
+
+  // If already on sidebar or no sidebar found, exit app
   if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.App) {
     window.Capacitor.Plugins.App.exitApp();
   }
@@ -964,25 +1014,39 @@ let pendingSourceName = '';
 let pendingSourceLink = '';
 
 document.getElementById('add-source-btn').onclick = () => {
+  // Clear inputs and open modal directly
+  document.getElementById('source-name-input').value = '';
+  document.getElementById('source-link-input').value = '';
+  openModal('add-source-modal');
+  setTimeout(() => document.getElementById('source-name-input').focus(), 50);
+};
+
+document.getElementById('btn-single-series').onclick = () => {
   pendingSourceName = document.getElementById('source-name-input').value.trim();
   let rawLink = document.getElementById('source-link-input').value.trim();
-  if (!rawLink) { showToast('Link is required', 'error'); return; }
-  
-  // Combine prefix if user just entered ID, or clean up if they entered full URL
+  if (!rawLink) { showToast('Channel link is required', 'error'); return; }
   if (rawLink.startsWith('http://') || rawLink.startsWith('https://')) {
     pendingSourceLink = rawLink;
   } else {
-    // Trim accidental leading /
     if (rawLink.startsWith('/')) rawLink = rawLink.substring(1);
     pendingSourceLink = 'https://t.me/' + rawLink;
   }
-  
-  openModal('add-source-modal');
-  document.getElementById('btn-single-series').focus();
+  submitSource(true);
 };
 
-document.getElementById('btn-single-series').onclick  = () => submitSource(true);
-document.getElementById('btn-multi-series').onclick   = () => submitSource(false);
+document.getElementById('btn-multi-series').onclick = () => {
+  pendingSourceName = document.getElementById('source-name-input').value.trim();
+  let rawLink = document.getElementById('source-link-input').value.trim();
+  if (!rawLink) { showToast('Channel link is required', 'error'); return; }
+  if (rawLink.startsWith('http://') || rawLink.startsWith('https://')) {
+    pendingSourceLink = rawLink;
+  } else {
+    if (rawLink.startsWith('/')) rawLink = rawLink.substring(1);
+    pendingSourceLink = 'https://t.me/' + rawLink;
+  }
+  submitSource(false);
+};
+
 document.getElementById('cancel-source-modal').onclick = () => closeModal('add-source-modal');
 
 async function submitSource(isSingleSeries) {
@@ -1019,27 +1083,35 @@ async function loadSources() {
   list.innerHTML = '';
   try {
     const sources = await window.DB.getSources(userId);
+    if (sources.length === 0) {
+      list.innerHTML = '<p class="empty-msg" style="padding:20px 0;">No sources added yet. Press "Add Source" to get started.</p>';
+      return;
+    }
     sources.forEach(s => {
       const st = window.AppIndexer.getState(s.id);
       const badgeIcon = { idle:'○', queued:'⏲', indexing:'⏳', done:'✓', error:'⚠' }[st.status] || '○';
       const badgeLabel = st.status === 'indexing' ? `Indexing… (${st.processed})` :
         st.status === 'queued' ? 'Queued' : st.status === 'done' ? 'Done' :
         st.status === 'error'  ? 'Error' : 'Idle';
-      const row = document.createElement('div');
-      row.className = 'source-row focusable';
-      row.tabIndex = 0;
-      row.id = `source-row-${s.id}`;
-      row.innerHTML = `
-        <div class="source-info">
+
+      const card = document.createElement('div');
+      card.className = 'source-card focusable';
+      card.tabIndex = 0;
+      card.id = `source-row-${s.id}`;
+      card.innerHTML = `
+        <div class="source-card-icon">📡</div>
+        <div class="source-card-info">
           <div class="source-name">${s.name}</div>
           <div class="source-link">${s.link}</div>
+          <span class="status-badge ${st.status}" id="badge-${s.id}" style="margin-top:6px;display:inline-flex;">${badgeIcon} ${badgeLabel}</span>
         </div>
-        <div class="source-row-actions">
-          <span class="status-badge ${st.status}" id="badge-${s.id}">${badgeIcon} ${badgeLabel}</span>
-          <button class="btn btn-secondary focusable" tabindex="0" onclick="refreshSource(${s.id})">Refresh</button>
-          <button class="btn btn-danger   focusable" tabindex="0" onclick="deleteSource(${s.id})">Delete</button>
+        <div class="source-card-actions">
+          <button class="source-action-btn sync focusable" tabindex="0"
+            title="Refresh" onclick="event.stopPropagation();refreshSource(${s.id})">🔄</button>
+          <button class="source-action-btn danger focusable" tabindex="0"
+            title="Delete" onclick="event.stopPropagation();deleteSource(${s.id})">🗑️</button>
         </div>`;
-      list.appendChild(row);
+      list.appendChild(card);
     });
   } catch(e) { console.error(e); }
 }
@@ -1752,7 +1824,7 @@ async function startApp() {
     
     // Hide loader, show app
     document.getElementById('initial-loader').style.display = 'none';
-    document.getElementById('app').style.display = 'block';
+    document.getElementById('app').style.display = 'flex';
 
     userId = window.TGClient.currentUserId;
     // Pre-fetch dialogs for channel access hashes
