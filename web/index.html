@@ -399,7 +399,7 @@ function showTab(view) {
     el.classList.toggle('active', v === view);
     tab.classList.toggle('active', v === view);
   });
-  if (view === 'catalog')   { loadCatalogSeries(); loadContinueWatching(); startIndexPoll(); }
+  if (view === 'catalog')   { loadCatalogSeries(true); loadContinueWatching(); startIndexPoll(); }
   if (view === 'favorites') loadFavorites();
   if (view === 'sources')   { loadSources(); startIndexPoll(); }
   if (view === 'settings')  loadSettings();
@@ -512,7 +512,7 @@ async function removeCW(episodeId) {
 
 // ── Catalog: Series ───────────────────────────────────────────────────────
 
-async function loadCatalogSeries() {
+async function loadCatalogSeries(skipFocus = false) {
   cleanupFavBar();
   catalogView = 'series';
   currentSeries = null;
@@ -559,7 +559,7 @@ async function loadCatalogSeries() {
       row.appendChild(card);
     });
 
-    if (row.firstElementChild) row.firstElementChild.focus();
+    if (!skipFocus && row.firstElementChild) row.firstElementChild.focus();
   } catch(e) { console.error(e); }
 }
 
