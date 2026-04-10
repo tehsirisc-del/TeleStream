@@ -1212,7 +1212,6 @@ async function startWizardQrSession() {
     if (window.activeShareListener) window.activeShareListener.remove();
 
     window.activeShareListener = await StreamPlayer.addListener('link_shared', async (raw) => {
-      // ... (existing code for link_shared)
       let data = raw;
       try { if (typeof raw === 'string') data = JSON.parse(raw); } catch(e) {}
       
@@ -1220,10 +1219,16 @@ async function startWizardQrSession() {
       document.getElementById('wizard-link-input').value = data.link || '';
 
       if (data.name && data.type) {
-        wizardPendingData = { link: data.link, name: data.name, type: data.type };
+        // Enriched package
+        wizardPendingData = {
+          link: data.link,
+          name: data.name,
+          type: data.type
+        };
         stopWizardQrSession();
-        await validateStepLink(true);
+        await validateStepLink(true); // Auto-mode
       } else {
+        // Fallback for simple link
         stopWizardQrSession();
         goToAddStep('link'); 
         await validateStepLink();

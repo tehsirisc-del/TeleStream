@@ -647,9 +647,16 @@ public class StreamPlayerPlugin extends Plugin {
                 if (method.equals("GET") && path.startsWith("/share.html")) {
                     sendResponse(out, 200, "text/html", getShareHtml());
                 } else if (method.equals("POST") && path.equals("/api/share/info")) {
-                    char[] bodyChars = new char[contentLength];
-                    int readLen = in.read(bodyChars, 0, contentLength);
-                    String payload = new String(bodyChars, 0, readLen);
+                    StringBuilder bodyBuilder = new StringBuilder();
+                    int totalRead = 0;
+                    char[] buffer = new char[1024];
+                    while (totalRead < contentLength) {
+                        int read = in.read(buffer, 0, Math.min(buffer.length, contentLength - totalRead));
+                        if (read == -1) break;
+                        bodyBuilder.append(buffer, 0, read);
+                        totalRead += read;
+                    }
+                    String payload = bodyBuilder.toString();
                     
                     if (payload.contains("\"token\":\"" + token + "\"")) {
                         String link = extractJsonValue(payload, "link");
@@ -678,16 +685,17 @@ public class StreamPlayerPlugin extends Plugin {
                         sendResponse(out, 403, "application/json", "{\"error\":\"Invalid token\"}");
                     }
                 } else if (method.equals("POST") && path.equals("/api/share/submit")) {
-                    char[] bodyChars = new char[contentLength];
-                    int read = 0;
-                    while (read < contentLength) {
-                        int r = in.read(bodyChars, read, contentLength - read);
-                        if (r == -1)
-                            break;
-                        read += r;
+                    StringBuilder bodyBuilder = new StringBuilder();
+                    int totalRead = 0;
+                    char[] buffer = new char[1024];
+                    while (totalRead < contentLength) {
+                        int readCount = in.read(buffer, 0, Math.min(buffer.length, contentLength - totalRead));
+                        if (readCount == -1) break;
+                        bodyBuilder.append(buffer, 0, readCount);
+                        totalRead += readCount;
                     }
-
-                    String payload = new String(bodyChars);
+                    String payload = bodyBuilder.toString();
+                    
                     if (payload.contains("\"token\":\"" + token + "\"")) {
                         String link = extractJsonValue(payload, "link");
                         String name = extractJsonValue(payload, "name");
@@ -724,10 +732,17 @@ public class StreamPlayerPlugin extends Plugin {
         private String extractJsonValue(String json, String key) {
             String search = "\"" + key + "\":\"";
             int start = json.indexOf(search);
+            if (start == -1) {
+                // Try without quotes on key if needed, or with spaces
+                search = "\"" + key + "\": \"";
+                start = json.indexOf(search);
+            }
             if (start == -1) return null;
+            
             start += search.length();
             int end = json.indexOf("\"", start);
             if (end == -1) return null;
+            
             return json.substring(start, end);
         }
 
