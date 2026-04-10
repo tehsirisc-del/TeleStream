@@ -521,45 +521,95 @@ async function loadCatalogSeries(skipFocus = false) {
   loadContinueWatching();
 
   const row = document.getElementById('catalog-row');
-  row.innerHTML = '';
-
-  // Placeholders
-  for (let i = 0; i < 8; i++) {
-    const ph = document.createElement('div');
-    ph.className = 'placeholder-card series-card';
-    row.appendChild(ph);
+  const isRefreshing = row.children.length > 0 && !row.querySelector('.placeholder-card');
+  
+  if (!isRefreshing) {
+    row.innerHTML = '';
+    for (let i = 0; i < 8; i++) {
+        const ph = document.createElement('div');
+        ph.className = 'placeholder-card series-card';
+        row.appendChild(ph);
+    }
   }
 
   try {
     const seriesList = await window.DB.getAllSeries(userId);
     const favs = new Set((await window.DB.getFavorites(userId)).filter(f => f.itemType === 'series').map(f => f.itemId));
-    row.innerHTML = '';
+    const indexerStates = window.AppIndexer.states;
+    const sources = await window.DB.getSources(userId);
 
-    if (seriesList.length === 0) {
-      row.innerHTML = '<p class="empty-msg">No series found. Add a Telegram source in the Sources tab.</p>';
-      return;
-    }
+    const existingCards = new Map([...row.children].map(c => [c.dataset.seriesId || c.dataset.sourceId, c]));
+    if (!isRefreshing) row.innerHTML = '';
 
+    // 1. Show existing series
     seriesList.forEach(s => {
       const isFav = favs.has(s.id);
-      const card = document.createElement('div');
-      card.className = 'card series-card focusable';
-      card.tabIndex = 0;
+      let card = existingCards.get(String(s.id));
+      const istate = indexerStates.get(s.sourceId);
+      const isIndexing = istate && (istate.status === 'indexing' || istate.status === 'queued');
+
+      if (!card) {
+          card = document.createElement('div');
+          card.className = 'card series-card focusable';
+          card.tabIndex = 0;
+          card.dataset.seriesId = s.id;
+          card.dataset.sourceId = s.sourceId;
+          row.appendChild(card);
+      }
+
       const avatarHtml = s.source_photo
         ? `<img class="card-avatar" src="${s.source_photo}" loading="lazy">`
         : `<div class="card-avatar-placeholder">${(s.title || '?')[0]}</div>`;
       
       const badgeHtml = isFav ? `<div style="position:absolute;top:10px;right:10px;font-size:1.2rem;z-index:2;filter:drop-shadow(0 2px 4px rgba(0,0,0,0.8));">❤️</div>` : '';
       
+      let progressHtml = '';
+      if (isIndexing) {
+          const pc = Math.min(99, Math.round(((istate.processed || 0) / (istate.total || 100)) * 100));
+          progressHtml = `
+            <div class="card-status-text">Indexing ${pc}%</div>
+            <div class="card-progress-container"><div class="card-progress-bar" style="width:${pc}%"></div></div>
+          `;
+      }
+
       card.innerHTML = `
         <div class="card-overlay"></div>
         ${badgeHtml}
-        <div class="card-body">${avatarHtml}<h3>${s.title}</h3></div>`;
+        <div class="card-body">${avatarHtml}<h3>${s.title}</h3></div>
+        ${progressHtml}`;
       card.onclick = () => loadSeasons(s);
-      row.appendChild(card);
     });
 
-    if (!skipFocus && row.firstElementChild) row.firstElementChild.focus();
+    // 2. Show indexing sources that haven't created series yet
+    sources.forEach(src => {
+        const istate = indexerStates.get(src.id);
+        if (istate && (istate.status === 'indexing' || istate.status === 'queued')) {
+            const hasSeries = seriesList.some(s => s.sourceId === src.id);
+            if (!hasSeries) {
+                let card = existingCards.get('src_' + src.id);
+                if (!card) {
+                    card = document.createElement('div');
+                    card.className = 'card series-card focusable indexing-placeholder';
+                    card.tabIndex = 0;
+                    card.dataset.sourceId = src.id;
+                    card.dataset.seriesId = 'src_' + src.id;
+                    row.appendChild(card);
+                }
+                const pc = Math.min(99, Math.round(((istate.processed || 0) / (istate.total || 100)) * 100));
+                card.innerHTML = `
+                    <div class="card-overlay" style="background: rgba(15, 23, 42, 0.8);"></div>
+                    <div class="card-body">
+                        <div class="card-avatar-placeholder" style="background:var(--accent); color:white;">🔄</div>
+                        <h3>Syncing: ${src.name}</h3>
+                    </div>
+                    <div class="card-status-text">Starting... ${pc}%</div>
+                    <div class="card-progress-container"><div class="card-progress-bar" style="width:${pc}%"></div></div>
+                `;
+            }
+        }
+    });
+
+    if (!skipFocus && !isRefreshing && row.firstElementChild) row.firstElementChild.focus();
   } catch(e) { console.error(e); }
 }
 
@@ -904,22 +954,34 @@ window.AppIndexer.onProgress = (sourceId, state) => {
   const pill = document.getElementById('indexing-pill');
   if (pill) pill.classList.toggle('active', anyIndexing);
   
-  const overlay = document.getElementById('sync-overlay');
-  if (overlay && overlay.style.display === 'flex') {
-    const activeStates = [...window.AppIndexer.states.values()].filter(s => s.status === 'indexing');
-    if (activeStates.length > 0) {
-       document.getElementById('sync-overlay-text').textContent = `Processing items: ${activeStates.reduce((acc, s) => acc + s.processed, 0)}... / Do not close the app.`;
+    const overlay = document.getElementById('sync-overlay');
+    if (overlay && overlay.style.display === 'flex') {
+        const activeStates = [...window.AppIndexer.states.values()].filter(s => s.status === 'indexing');
+        if (activeStates.length > 0) {
+            const totalP = activeStates.reduce((acc, s) => acc + s.processed, 0);
+            document.getElementById('sync-overlay-text').textContent = `Syncing Library... ${totalP} items found.`;
+        }
+        if (!anyIndexing) {
+            overlay.style.display = 'none';
+        }
     }
-    if (!anyIndexing) {
-       overlay.style.display = 'none';
-       if (currentView === 'catalog' && catalogView === 'series') loadCatalogSeries();
-    }
-  }
 
-  // Refresh catalog when done naturally
-  if (state.status === 'done' && currentView === 'catalog' && catalogView === 'series' && (!overlay || overlay.style.display !== 'flex')) {
-    loadCatalogSeries();
-  }
+    // SURGICAL UPDATE: Find the card for this source and update only its progress bar
+    if (state.status === 'indexing' || state.status === 'queued') {
+        const pc = Math.min(99, Math.round(((state.processed || 0) / (state.total || 100)) * 100));
+        const cards = document.querySelectorAll(`[data-source-id="${sourceId}"]`);
+        cards.forEach(card => {
+            const bar = card.querySelector('.card-progress-bar');
+            const text = card.querySelector('.card-status-text');
+            if (bar) bar.style.width = pc + '%';
+            if (text) text.textContent = (card.classList.contains('indexing-placeholder') ? 'Syncing... ' : 'Indexing ') + pc + '%';
+        });
+    }
+
+    // Refresh everything ONLY when absolutely done to catch new series creators
+    if (state.status === 'done') {
+        if (currentView === 'catalog' && catalogView === 'series') loadCatalogSeries(true);
+    }
 };
 
 function startIndexPoll(force = false) {
