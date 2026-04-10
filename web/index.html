@@ -476,47 +476,74 @@ async function loadContinueWatching() {
     }
     const sec = document.getElementById('continue-watching-section');
     const row = document.getElementById('cw-row');
-    if (data.length === 0) { sec.style.display = 'none'; return; }
+    
+    if (data.length === 0) { 
+        sec.style.display = 'none'; 
+        row.innerHTML = '';
+        return; 
+    }
     sec.style.display = 'block';
 
-    const focusedId = document.activeElement?.dataset.episodeId;
-    const existingCards = new Map([...row.children].map(c => [c.dataset.episodeId, c]));
-    const newItems = [];
+    const currentIds = new Set(data.map(e => String(e.id)));
 
-    data.forEach(e => {
+    // 1. Surgical removal: Only remove cards that are GONE
+    [...row.children].forEach(card => {
+        if (!currentIds.has(card.dataset.episodeId)) {
+            card.remove();
+        }
+    });
+
+    // 2. Surgical update/add:
+    data.forEach((e, index) => {
       const d = (e.progress_duration > 60) ? e.progress_duration : (e.duration || 1);
       const pct = Math.min(100, (e.progress_seconds / d) * 100);
       
-      let card = existingCards.get(String(e.id));
-      if (!card) {
+      let card = row.querySelector(`[data-episode-id="${e.id}"]`);
+      const isNew = !card;
+      
+      if (isNew) {
           card = document.createElement('div');
           card.className = 'card episode-card focusable';
           card.tabIndex = 0;
           card.dataset.episodeId = e.id;
+          card.innerHTML = `
+            <div style="width:100%">
+              <h4 class="cw-title"></h4>
+              <p class="cw-ep-title"></p>
+              <div class="progress-bar"><div class="progress-fill"></div></div>
+              <span class="cw-left-text" style="font-size:0.75rem;color:#94a3b8;margin-top:5px;display:block;"></span>
+            </div>
+            <button onclick="event.stopPropagation();removeCW(${e.id})" class="focusable cw-remove-btn"
+              style="position:absolute;top:8px;right:8px;background:rgba(15,23,42,0.8);border:none;color:#94a3b8;
+                     width:32px;height:32px;border-radius:50%;font-size:1.2rem;cursor:pointer;z-index:20;
+                     display:flex;align-items:center;justify-content:center;" tabindex="0">×</button>`;
+          card.onclick = () => playEpisode(e);
+          row.appendChild(card);
       }
       
-      card.innerHTML = `
-        <button onclick="event.stopPropagation();removeCW(${e.id})" class="focusable"
-          style="position:absolute;top:8px;right:8px;background:rgba(15,23,42,0.8);border:none;color:#94a3b8;
-                 width:32px;height:32px;border-radius:50%;font-size:1.2rem;cursor:pointer;z-index:20;
-                 display:flex;align-items:center;justify-content:center;" tabindex="0">×</button>
-        <div style="width:100%">
-          <h4>${e.series_title} — E${e.episodeNumber}</h4>
-          <p>${e.title}</p>
-          <div class="progress-bar"><div class="progress-fill" style="width:${pct}%"></div></div>
-          <span style="font-size:0.75rem;color:#94a3b8;margin-top:5px;display:block;">${d > 0 ? (formatTime(Math.max(0, d - e.progress_seconds)) + ' left') : ''}</span>
-        </div>`;
-      card.onclick = () => playEpisode(e);
-      newItems.push(card);
+      // DEEP SURGICAL UPDATE: Update sub-elements directly
+      // This keeps the 'X' button child alive so focus is never lost
+      const titleEl = card.querySelector('.cw-title');
+      const epTitleEl = card.querySelector('.cw-ep-title');
+      const fillEl = card.querySelector('.progress-fill');
+      const leftEl = card.querySelector('.cw-left-text');
+      
+      const newTitle = `${e.series_title} — E${e.episodeNumber}`;
+      if (titleEl.textContent !== newTitle) titleEl.textContent = newTitle;
+      if (epTitleEl.textContent !== e.title) epTitleEl.textContent = e.title;
+      
+      const newWidth = pct + '%';
+      if (fillEl.style.width !== newWidth) fillEl.style.width = newWidth;
+      
+      const newLeft = d > 0 ? (formatTime(Math.max(0, d - e.progress_seconds)) + ' left') : '';
+      if (leftEl.textContent !== newLeft) leftEl.textContent = newLeft;
+
+      // Maintain order
+      if (row.children[index] !== card) {
+          row.insertBefore(card, row.children[index]);
+      }
     });
 
-    row.innerHTML = '';
-    newItems.forEach(item => row.appendChild(item));
-
-    if (focusedId) {
-        const toFocus = row.querySelector(`[data-episode-id="${focusedId}"]`);
-        if (toFocus) toFocus.focus();
-    }
   } catch(ex) { console.error(ex); }
 }
 
@@ -995,9 +1022,16 @@ window.AppIndexer.onProgress = (sourceId, state) => {
         });
     }
 
-    // Refresh everything ONLY when absolutely done to catch new series creators
-    if (state.status === 'done') {
-        if (currentView === 'catalog' && catalogView === 'series') loadCatalogSeries(true);
+    // Refresh everything ONLY when absolutely done OR occasionally during long index
+    // To catch new series creators without spamming re-renders
+    const now = Date.now();
+    if (!window.lastCatalogRefresh) window.lastCatalogRefresh = 0;
+
+    if (state.status === 'done' || (now - window.lastCatalogRefresh > 2000)) {
+        if (currentView === 'catalog' && catalogView === 'series') {
+            loadCatalogSeries(true);
+            window.lastCatalogRefresh = now;
+        }
     }
 };
 
