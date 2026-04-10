@@ -32,6 +32,10 @@ import java.net.ServerSocket;
 import java.net.Socket;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.UUID;
 
 @CapacitorPlugin(name = "StreamPlayer")
 public class StreamPlayerPlugin extends Plugin {
@@ -55,6 +59,8 @@ public class StreamPlayerPlugin extends Plugin {
 
     private BridgeDataSource currentBridgeDataSource;
     private LocalFeedServer localFeedServer;
+
+    private final ConcurrentHashMap<String, CompletableFuture<JSObject>> pendingMetadataRequests = new ConcurrentHashMap<>();
 
     @PluginMethod
     public void play(PluginCall call) {
@@ -127,6 +133,20 @@ public class StreamPlayerPlugin extends Plugin {
         String msg = call.getString("msg", "");
         String level = call.getString("level", "info");
         updateNativeDebug("[" + level.toUpperCase() + "] " + msg);
+        call.resolve();
+    }
+
+    @PluginMethod
+    public void sendMetadataResponse(PluginCall call) {
+        String requestId = call.getString("requestId");
+        JSObject data = call.getObject("data");
+        
+        if (requestId != null && pendingMetadataRequests.containsKey(requestId)) {
+            CompletableFuture<JSObject> future = pendingMetadataRequests.remove(requestId);
+            if (future != null) {
+                future.complete(data);
+            }
+        }
         call.resolve();
     }
 
@@ -626,6 +646,37 @@ public class StreamPlayerPlugin extends Plugin {
 
                 if (method.equals("GET") && path.startsWith("/share.html")) {
                     sendResponse(out, 200, "text/html", getShareHtml());
+                } else if (method.equals("POST") && path.equals("/api/share/info")) {
+                    char[] bodyChars = new char[contentLength];
+                    int readLen = in.read(bodyChars, 0, contentLength);
+                    String payload = new String(bodyChars, 0, readLen);
+                    
+                    if (payload.contains("\"token\":\"" + token + "\"")) {
+                        String link = extractJsonValue(payload, "link");
+                        String requestId = UUID.randomUUID().toString();
+                        
+                        CompletableFuture<JSObject> future = new CompletableFuture<>();
+                        pendingMetadataRequests.put(requestId, future);
+                        
+                        // Trigger JS to resolve this
+                        JSObject eventData = new JSObject();
+                        eventData.put("requestId", requestId);
+                        eventData.put("link", link);
+                        if (StreamPlayerPlugin.this.bridge != null) {
+                            StreamPlayerPlugin.this.bridge.triggerWindowJSEvent("need_metadata", eventData.toString());
+                        }
+                        
+                        try {
+                            // Wait for JS response (Max 10s)
+                            JSObject meta = future.get(10, TimeUnit.SECONDS);
+                            sendResponse(out, 200, "application/json", meta.toString());
+                        } catch (Exception e) {
+                            pendingMetadataRequests.remove(requestId);
+                            sendResponse(out, 500, "application/json", "{\"error\":\"Timeout or error resolving metadata\"}");
+                        }
+                    } else {
+                        sendResponse(out, 403, "application/json", "{\"error\":\"Invalid token\"}");
+                    }
                 } else if (method.equals("POST") && path.equals("/api/share/submit")) {
                     char[] bodyChars = new char[contentLength];
                     int read = 0;
@@ -638,11 +689,15 @@ public class StreamPlayerPlugin extends Plugin {
 
                     String payload = new String(bodyChars);
                     if (payload.contains("\"token\":\"" + token + "\"")) {
-                        int linkIdx = payload.indexOf("\"link\":\"");
-                        if (linkIdx != -1) {
-                            String link = payload.substring(linkIdx + 8, payload.indexOf("\"", linkIdx + 8));
+                        String link = extractJsonValue(payload, "link");
+                        String name = extractJsonValue(payload, "name");
+                        String type = extractJsonValue(payload, "type");
+
+                        if (link != null) {
                             JSObject data = new JSObject();
                             data.put("link", link);
+                            data.put("name", name);
+                            data.put("type", type);
                             if (StreamPlayerPlugin.this.bridge != null) {
                                 StreamPlayerPlugin.this.bridge.triggerWindowJSEvent("link_shared", data.toString());
                             }
@@ -666,6 +721,16 @@ public class StreamPlayerPlugin extends Plugin {
             }
         }
 
+        private String extractJsonValue(String json, String key) {
+            String search = "\"" + key + "\":\"";
+            int start = json.indexOf(search);
+            if (start == -1) return null;
+            start += search.length();
+            int end = json.indexOf("\"", start);
+            if (end == -1) return null;
+            return json.substring(start, end);
+        }
+
         private void sendResponse(BufferedWriter out, int code, String type, String body) throws Exception {
             out.write("HTTP/1.1 " + code + (code == 200 ? " OK" : " Error") + "\r\n");
             out.write("Content-Type: " + type + "; charset=utf-8\r\n");
@@ -678,28 +743,38 @@ public class StreamPlayerPlugin extends Plugin {
         }
 
         private String getShareHtml() {
-            // Embedded minimal version of share.html for standalone operation
-            return "<!DOCTYPE html><html><head>" +
-                    "<meta charset='UTF-8'><meta name='viewport' content='width=device-width,initial-scale=1'>" +
-                    "<title>Send to Screen</title>" +
-                    "<style>body{background:#0f172a;color:#fff;font-family:sans-serif;text-align:center;padding:40px 20px;}"
-                    +
-                    "h1{color:#38bdf8;}input{width:100%;padding:15px;border-radius:8px;border:1px solid #334155;background:#1e293b;color:#fff;margin:20px 0;}"
-                    +
-                    "button{width:100%;padding:15px;border-radius:8px;background:#3b82f6;color:#fff;border:none;font-weight:bold;}</style></head>"
-                    +
-                    "<body><h1>📱 Send to Screen</h1><p>Paste Link:</p>" +
-                    "<input id='l' placeholder='https://t.me/...'><button id='b'>Send Link</button>" +
-                    "<script>document.getElementById('b').onclick=async()=>{ " +
-                    "const l=document.getElementById('l').value; const t=new URLSearchParams(window.location.search).get('token');"
-                    +
-                    "document.getElementById('b').disabled=true; document.getElementById('b').innerText='Sending...';" +
-                    "try{ const r=await fetch('/api/share/submit',{method:'POST',body:JSON.stringify({token:t,link:l})});"
-                    +
-                    "if(r.ok) alert('Sent!'); else alert('Failed'); }catch(e){alert(e);}" +
-                    "document.getElementById('b').disabled=false; document.getElementById('b').innerText='Send Link'; };"
-                    +
-                    "</script></body></html>";
+            return "<!DOCTYPE html><html lang=\"he\" dir=\"rtl\"><head>" +
+                "<meta charset=\"UTF-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no\">" +
+                "<title>TeleStream - שיתוף מקור</title>" +
+                "<link href=\"https://fonts.googleapis.com/css2?family=Assistant:wght@400;600;700;800&display=swap\" rel=\"stylesheet\">" +
+                "<style>" +
+                ":root { --bg-base: #0B0C10; --accent: #3B82F6; --text-primary: #F8FAFC; --text-secondary: #94A3B8; --danger: #EF4444; --success: #22C55E; }" +
+                "* { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Assistant', sans-serif; }" +
+                "body { background: radial-gradient(circle at top, #1e293b 0%, var(--bg-base) 100%); color: var(--text-primary); min-height: 100vh; display: flex; flex-direction: column; align-items: center; padding: 30px 20px; }" +
+                ".container { width: 100%; max-width: 450px; display: flex; flex-direction: column; gap: 24px; }" +
+                ".brand { display: flex; align-items: center; justify-content: center; gap: 12px; margin-bottom: 20px; } .brand-icon { font-size: 2.5rem; } .brand-name { font-size: 1.8rem; font-weight: 800; background: linear-gradient(to left, #38bdf8, #818cf8); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }" +
+                ".card { background: rgba(26, 28, 35, 0.8); backdrop-filter: blur(12px); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 24px; padding: 24px; box-shadow: 0 20px 40px rgba(0,0,0,0.4); display: none; animation: fadeIn 0.3s ease-out; }" +
+                ".card.active { display: block; } @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }" +
+                "h2 { font-size: 1.4rem; margin-bottom: 12px; font-weight: 700; text-align: center; } p { font-size: 0.95rem; color: var(--text-secondary); margin-bottom: 20px; text-align: center; line-height: 1.5; }" +
+                ".instructions { background: rgba(59, 130, 246, 0.08); border-radius: 16px; padding: 16px; margin-bottom: 24px; text-align: right; }" +
+                ".instruction-step { display: flex; gap: 12px; margin-bottom: 12px; font-size: 0.9rem; } .step-num { background: var(--accent); color: white; width: 20px; height: 20px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 0.75rem; font-weight: 800; flex-shrink: 0; }" +
+                ".styled-input { width: 100%; background: #0f172a; border: 2px solid #334155; color: white; border-radius: 14px; padding: 16px; font-size: 1rem; outline: none; transition: all 0.2s; margin-bottom: 16px; text-align: center; }" +
+                ".styled-input:focus { border-color: var(--accent); box-shadow: 0 0 15px rgba(59, 130, 246, 0.3); }" +
+                ".primary-btn { width: 100%; background: var(--accent); color: white; border: none; padding: 16px; border-radius: 14px; font-size: 1.1rem; font-weight: 700; cursor: pointer; transition: all 0.2s; display: flex; align-items: center; justify-content: center; gap: 8px; }" +
+                ".primary-btn:active { transform: scale(0.96); } .secondary-btn { width: 100%; background: transparent; color: var(--text-secondary); border: 1px solid #334155; padding: 14px; border-radius: 14px; font-size: 1rem; font-weight: 600; cursor: pointer; margin-top: 12px; }" +
+                ".type-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 12px; } .type-card { background: #0f172a; border: 2px solid #334155; padding: 20px 10px; border-radius: 16px; text-align: center; cursor: pointer; transition: all 0.2s; } .type-card.active { border-color: var(--accent); background: rgba(59, 130, 246, 0.1); } .type-card .icon { font-size: 1.8rem; margin-bottom: 8px; display: block; } .type-card .label { font-size: 0.85rem; font-weight: 700; }" +
+                ".loader { border: 4px solid rgba(255,255,255,0.1); border-top: 4px solid var(--accent); border-radius: 50%; width: 30px; height: 30px; animation: spin 1s linear infinite; } @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }" +
+                ".error-msg { color: var(--danger); font-size: 0.9rem; margin-top: 10px; text-align: center; font-weight: 600; }" +
+                "</style></head><body><div class=\"container\"><div class=\"brand\"><span class=\"brand-icon\">🎬</span><span class=\"brand-name\">TeleStream</span></div>" +
+                "<div class=\"card active\" id=\"step-link\"><h2>הוספת מקור חדש</h2><p>שתף את התוכן מהנייד היישר לטלוויזיה שלך.</p><div class=\"instructions\"><div class=\"instruction-step\"><div class=\"step-num\">1</div><div>פתח את ערוץ הטלגרם המבוקש.</div></div><div class=\"instruction-step\"><div class=\"step-num\">2</div><div>לחץ <b>לחיצה ארוכה</b> על הודעה בערוץ.</div></div><div class=\"instruction-step\"><div class=\"step-num\">3</div><div>בחר ב-<b>Copy Link</b> (העתק קישור).</div></div><div class=\"instruction-step\"><div class=\"step-num\">4</div><div>הדבק את הקישור כאן למטה.</div></div></div><input type=\"url\" id=\"input-link\" class=\"styled-input\" placeholder=\"https://t.me/c/...\"><button class=\"primary-btn\" onclick=\"nextStep('meta')\">הממשך לשם המקור ➔</button><div id=\"error-link\" class=\"error-msg\" style=\"display:none;\">אנא הכנס קישור תקין</div></div>" +
+                "<div class=\"card\" id=\"step-meta\"><div id=\"meta-fetching\" style=\"display:none;flex-direction:column;align-items:center;gap:16px;\"><div class=\"loader\"></div><p>מושך נתונים מהטלגרם...</p></div><div id=\"meta-content\" style=\"display:flex;flex-direction:column;align-items:center;width:100%;\"><h2>כיצד להציג את המקור?</h2><div id=\"meta-avatar-container\" style=\"margin-bottom:16px;\"></div><p>תן שם ברור למקור כדי שתוכל למצוא אותו בקלות בקטלוג.</p><input type=\"text\" id=\"input-name\" class=\"styled-input\" placeholder=\"שם הערוץ / הסדרה\"><button class=\"primary-btn\" onclick=\"nextStep('type')\">המשך לבחירת סוג ➔</button><button class=\"secondary-btn\" onclick=\"nextStep('link')\">חזור</button></div></div>" +
+                "<div class=\"card\" id=\"step-type\"><h2>מה סוג התוכן?</h2><p>האם הערוץ מכיל סדרה אחת בלבד או אוסף של סרטים וסדרות?</p><div class=\"type-grid\"><div class=\"type-card\" id=\"type-single\" onclick=\"setType('single')\"><span class=\"icon\">🎬</span><span class=\"label\">סדרה אחת</span></div><div class=\"type-card\" id=\"type-multi\" onclick=\"setType('multi')\"><span class=\"icon\">📂</span><span class=\"label\">כמה סדרות (Multi)</span></div></div><button class=\"primary-btn\" id=\"send-btn\" onclick=\"submitToTv()\" style=\"margin-top:24px;\">שלח לטלוויזיה ✨</button><button class=\"secondary-btn\" onclick=\"nextStep('meta')\">חזור</button></div>" +
+                "<div class=\"card\" id=\"step-status\"><div id=\"status-loading\" style=\"display:flex;flex-direction:column;align-items:center;gap:20px;\"><div class=\"loader\"></div><h2>שולח לטלוויזיה...</h2></div>" +
+                "<div id=\"status-done\" style=\"display:none;flex-direction:column;align-items:center;gap:20px;color:var(--success);\"><span style=\"font-size:4rem;\">✅</span><h2>נשלח בהצלחה!</h2><p>הטלוויזיה שלך התחילה לעבוד. אתה יכול לסגור את העמוד.</p><button class=\"primary-btn\" onclick=\"window.location.reload()\">הוסף מקור נוסף</button></div>" +
+                "<div id=\"status-error\" style=\"display:none;flex-direction:column;align-items:center;gap:20px;color:var(--danger);\"><span style=\"font-size:4rem;\">❌</span><h2>משהו השתבש</h2><p id=\"error-text\">לא הצלחנו להתחבר לטלוויזיה.</p><button class=\"primary-btn\" onclick=\"nextStep('type')\">נסה שוב</button></div></div></div>" +
+                "<script>const params=new URLSearchParams(window.location.search);const token=params.get('token');let wizardData={link:'',name:'',type:'single'};" +
+                "async function nextStep(s){if(s==='meta'){const l=document.getElementById('input-link').value.trim();if(!l||!l.includes('t.me/')){document.getElementById('error-link').style.display='block';return;}wizardData.link=l;document.getElementById('error-link').style.display='none';document.querySelectorAll('.card').forEach(c=>c.classList.remove('active'));document.getElementById('step-meta').classList.add('active');const f=document.getElementById('meta-fetching');const c=document.getElementById('meta-content');f.style.display='flex';c.style.display='none';try{const r=await fetch('/api/share/info',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token,link:wizardData.link})});const d=await r.json();f.style.display='none';c.style.display='flex';const n=document.getElementById('input-name');const a=document.getElementById('meta-avatar-container');if(d.success){n.value=d.title;if(d.photo)a.innerHTML=`<img src=\"${d.photo}\" style=\"width:80px;height:80px;border-radius:50%;border:3px solid var(--accent);object-fit:cover;\">`;else a.innerHTML='<div style=\"font-size:3rem;\">📡</div>';}else{const p=l.split('/');n.value=p[p.length-1]||p[p.length-2];a.innerHTML='<div style=\"font-size:3rem;\">📡</div>';}}catch(e){f.style.display='none';c.style.display='flex';const p=l.split('/');document.getElementById('input-name').value=p[p.length-1]||p[p.length-2];}return;}if(s==='type'){wizardData.name=document.getElementById('input-name').value.trim()||wizardData.link;}document.querySelectorAll('.card').forEach(c=>c.classList.remove('active'));document.getElementById('step-'+s).classList.add('active');}" +
+                "function setType(t){wizardData.type=t;document.getElementById('type-single').classList.toggle('active',t==='single');document.getElementById('type-multi').classList.toggle('active',t==='multi');}async function submitToTv(){if(!token){alert('טוקן לא תקין.');return;}nextStep('status');document.getElementById('status-loading').style.display='flex';document.getElementById('status-done').style.display='none';document.getElementById('status-error').style.display='none';try{const r=await fetch('/api/share/submit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token,link:wizardData.link,name:wizardData.name,type:wizardData.type})});const d=await r.json();if(d.success){document.getElementById('status-loading').style.display='none';document.getElementById('status-done').style.display='flex';}else{throw new Error(d.error||'שגיאת שרת');}}catch(e){document.getElementById('status-loading').style.display='none';document.getElementById('status-error').style.display='flex';document.getElementById('error-text').innerText=e.message;}}setType('single');</script></body></html>";
         }
     }
 }

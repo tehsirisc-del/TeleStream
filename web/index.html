@@ -1211,28 +1211,62 @@ async function startWizardQrSession() {
     // Remove old listener if exists
     if (window.activeShareListener) window.activeShareListener.remove();
 
-    window.activeShareListener = await StreamPlayer.addListener('link_shared', (data) => {
-      console.log('[Wizard] Shared link received:', data.link);
-      document.getElementById('wizard-link-input').value = data.link;
-      stopWizardQrSession();
-      goToAddStep('link'); // Auto proceed to link validation
-      validateStepLink();
+    window.activeShareListener = await StreamPlayer.addListener('link_shared', async (raw) => {
+      // ... (existing code for link_shared)
+      let data = raw;
+      try { if (typeof raw === 'string') data = JSON.parse(raw); } catch(e) {}
+      
+      console.log('[Wizard] Shared data received:', data);
+      document.getElementById('wizard-link-input').value = data.link || '';
+
+      if (data.name && data.type) {
+        wizardPendingData = { link: data.link, name: data.name, type: data.type };
+        stopWizardQrSession();
+        await validateStepLink(true);
+      } else {
+        stopWizardQrSession();
+        goToAddStep('link'); 
+        await validateStepLink();
+      }
+    });
+
+    // Handle metadata requests from phone
+    window.metadataRequestListener = await StreamPlayer.addListener('need_metadata', async (raw) => {
+      let req = raw;
+      try { if (typeof raw === 'string') req = JSON.parse(raw); } catch(e) {}
+      console.log('[Wizard] Metadata requested for:', req.link);
+      
+      try {
+        const { channelArg } = await window.TGClient.resolveChannelFromLink(req.link);
+        const entity = await window.TGClient.getEntity(channelArg);
+        const title = entity.title || entity.username || 'Telegram Channel';
+        const photo = await window.TGClient.downloadProfilePhoto(entity);
+        
+        await StreamPlayer.sendMetadataResponse({
+          requestId: req.requestId,
+          data: { success: true, title, photo }
+        });
+      } catch(e) {
+        await StreamPlayer.sendMetadataResponse({
+          requestId: req.requestId,
+          data: { success: false, error: e.message }
+        });
+      }
     });
   }
 }
 
 function stopWizardQrSession() {
   if (window.Capacitor && window.Capacitor.Plugins.StreamPlayer) {
-    window.Capacitor.Plugins.StreamPlayer.stopShareServer();
-    if (window.activeShareListener) {
-      window.activeShareListener.remove();
-      window.activeShareListener = null;
-    }
+    const { StreamPlayer } = window.Capacitor.Plugins;
+    StreamPlayer.stopShareServer();
+    if (window.activeShareListener) { window.activeShareListener.remove(); window.activeShareListener = null; }
+    if (window.metadataRequestListener) { window.metadataRequestListener.remove(); window.metadataRequestListener = null; }
   }
 }
 
 
-async function validateStepLink() {
+async function validateStepLink(isAuto = false) {
   const input = document.getElementById('wizard-link-input');
   let raw = input.value.trim();
   if (!raw) { showToast('Link is required', 'error'); return; }
@@ -1243,17 +1277,27 @@ async function validateStepLink() {
     link = 'https://t.me/' + raw;
   }
   
-  wizardPendingData.link = link;
+  if (!isAuto) wizardPendingData.link = link;
   goToAddStep('loading');
   
   try {
     const { channelArg } = await window.TGClient.resolveChannelFromLink(link);
     const entity = await window.TGClient.getEntity(channelArg);
-    wizardPendingData.name = entity.title || entity.username || 'Telegram Channel';
+    // If isAuto, we keep the name provided by the phone, otherwise use Telegram's name
+    if (!isAuto) {
+      wizardPendingData.name = entity.title || entity.username || 'Telegram Channel';
+    }
     
-    // Attempt photo download
+    // Attempt photo download (always good for the UI)
     wizardPendingData.photo = await window.TGClient.downloadProfilePhoto(entity);
     
+    if (isAuto) {
+        // Mobile wizard already confirmed name/type, just finish
+        console.log('[Wizard] Auto-finishing with data:', wizardPendingData);
+        finalizeWizardAdd();
+        return;
+    }
+
     document.getElementById('fetched-name-display').textContent = wizardPendingData.name;
     const avatarCont = document.getElementById('confirm-source-avatar-container');
     if (wizardPendingData.photo) {

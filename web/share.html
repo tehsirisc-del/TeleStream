@@ -1,115 +1,400 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="he" dir="rtl">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>Send to Screen - Telegram Video Streamer</title>
+  <title>TeleStream - שיתוף מקור</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=Assistant:wght@400;600;700;800&display=swap" rel="stylesheet">
   <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Inter', system-ui, sans-serif; }
-    body { background-color: #0f172a; color: #f8fafc; height: 100vh; padding: 20px; text-align: center; }
-    h1 { font-size: 1.5rem; margin-top: 40px; margin-bottom: 8px; color: #38bdf8; }
-    p { font-size: 0.95rem; color: #cbd5e1; margin-bottom: 30px; }
+    :root {
+      --bg-base: #0B0C10;
+      --bg-surface: #1A1C23;
+      --accent: #3B82F6;
+      --accent-hover: #2563EB;
+      --text-primary: #F8FAFC;
+      --text-secondary: #94A3B8;
+      --danger: #EF4444;
+      --success: #22C55E;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Assistant', 'Inter', sans-serif; }
     
+    body {
+      background: radial-gradient(circle at top, #1e293b 0%, var(--bg-base) 100%);
+      color: var(--text-primary);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 30px 20px;
+    }
+
+    .container {
+      width: 100%;
+      max-width: 450px;
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      margin-bottom: 20px;
+    }
+    .brand-icon { font-size: 2.5rem; }
+    .brand-name { 
+      font-size: 1.8rem; 
+      font-weight: 800; 
+      background: linear-gradient(to left, #38bdf8, #818cf8);
+      -webkit-background-clip: text;
+      background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .card {
+      background: rgba(26, 28, 35, 0.8);
+      backdrop-filter: blur(12px);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 24px;
+      padding: 24px;
+      box-shadow: 0 20px 40px rgba(0,0,0,0.4);
+      display: none;
+      animation: fadeIn 0.3s ease-out;
+    }
+    .card.active { display: block; }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    h2 { font-size: 1.4rem; margin-bottom: 12px; font-weight: 700; text-align: center; }
+    p { font-size: 0.95rem; color: var(--text-secondary); margin-bottom: 20px; text-align: center; line-height: 1.5; }
+
+    .instructions {
+      background: rgba(59, 130, 246, 0.08);
+      border-radius: 16px;
+      padding: 16px;
+      margin-bottom: 24px;
+      text-align: right;
+    }
+    .instruction-step {
+      display: flex;
+      gap: 12px;
+      margin-bottom: 12px;
+      font-size: 0.9rem;
+    }
+    .step-num {
+      background: var(--accent);
+      color: white;
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.75rem;
+      font-weight: 800;
+      flex-shrink: 0;
+    }
+
     .styled-input {
       width: 100%;
-      background: #1e293b;
+      background: #0f172a;
       border: 2px solid #334155;
-      color: #e2e8f0;
-      border-radius: 12px;
+      color: white;
+      border-radius: 14px;
       padding: 16px;
       font-size: 1rem;
       outline: none;
-      margin-bottom: 20px;
       transition: all 0.2s;
+      margin-bottom: 16px;
+      text-align: center;
     }
-    .styled-input:focus { border-color: #3b82f6; }
-    
+    .styled-input:focus { border-color: var(--accent); box-shadow: 0 0 15px rgba(59, 130, 246, 0.3); }
+
     .primary-btn {
       width: 100%;
-      background: #3b82f6;
+      background: var(--accent);
       color: white;
       border: none;
       padding: 16px;
-      border-radius: 12px;
+      border-radius: 14px;
       font-size: 1.1rem;
+      font-weight: 700;
+      cursor: pointer;
+      transition: all 0.2s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+    .primary-btn:active { transform: scale(0.96); }
+    .primary-btn:disabled { background: #334155; color: #64748b; cursor: not-allowed; }
+
+    .secondary-btn {
+      width: 100%;
+      background: transparent;
+      color: var(--text-secondary);
+      border: 1px solid #334155;
+      padding: 14px;
+      border-radius: 14px;
+      font-size: 1rem;
       font-weight: 600;
       cursor: pointer;
-      box-shadow: 0 4px 14px rgba(59, 130, 246, 0.4);
+      margin-top: 12px;
     }
-    .primary-btn:active { transform: scale(0.98); }
-    
-    .status { margin-top: 20px; font-weight: 500; }
-    .success { color: #10b981; }
-    .error { color: #ef4444; }
+
+    .type-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      margin-top: 12px;
+    }
+    .type-card {
+      background: #0f172a;
+      border: 2px solid #334155;
+      padding: 20px 10px;
+      border-radius: 16px;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .type-card.active { border-color: var(--accent); background: rgba(59, 130, 246, 0.1); }
+    .type-card .icon { font-size: 1.8rem; margin-bottom: 8px; display: block; }
+    .type-card .label { font-size: 0.85rem; font-weight: 700; }
+
+    .loader {
+      border: 4px solid rgba(255,255,255,0.1);
+      border-top: 4px solid var(--accent);
+      border-radius: 50%;
+      width: 30px;
+      height: 30px;
+      animation: spin 1s linear infinite;
+    }
+    @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+
+    .error-msg { color: var(--danger); font-size: 0.9rem; margin-top: 10px; text-align: center; font-weight: 600; }
   </style>
 </head>
 <body>
 
-  <h1>📱 Send to Screen</h1>
-  <p>Paste a Telegram message link below. It will automatically open on your desktop screen.</p>
+  <div class="container">
+    <div class="brand">
+      <span class="brand-icon">🎬</span>
+      <span class="brand-name">TeleStream</span>
+    </div>
 
-  <input type="url" id="linkInput" class="styled-input" placeholder="https://t.me/channel/123" />
-  <button id="sendBtn" class="primary-btn">Send Link</button>
-  
-  <div id="status" class="status"></div>
+    <!-- Step 1: Link Input & Instructions -->
+    <div class="card active" id="step-link">
+      <h2>הוספת מקור חדש</h2>
+      <p>שתף את התוכן מהנייד היישר לטלוויזיה שלך.</p>
+      
+      <div class="instructions">
+        <div class="instruction-step">
+          <div class="step-num">1</div>
+          <div>פתח את ערוץ הטלגרם המבוקש.</div>
+        </div>
+        <div class="instruction-step">
+          <div class="step-num">2</div>
+          <div>לחץ <b>לחיצה ארוכה</b> על הודעה בערוץ.</div>
+        </div>
+        <div class="instruction-step">
+          <div class="step-num">3</div>
+          <div>בחר ב-<b>Copy Link</b> (העתק קישור).</div>
+        </div>
+        <div class="instruction-step">
+          <div class="step-num">4</div>
+          <div>הדבק את הקישור כאן למטה.</div>
+        </div>
+      </div>
+
+      <input type="url" id="input-link" class="styled-input" placeholder="https://t.me/c/..." />
+      <button class="primary-btn" onclick="nextStep('meta')">הממשך לשם המקור ➔</button>
+      <div id="error-link" class="error-msg" style="display:none;">אנא הכנס קישור תקין</div>
+    </div>
+
+    <!-- Step 2: Confirm/Edit Name -->
+    <div class="card" id="step-meta">
+      <div id="meta-fetching" style="display:none; flex-direction:column; align-items:center; gap:16px;">
+        <div class="loader"></div>
+        <p>מושך נתונים מהטלגרם...</p>
+      </div>
+      <div id="meta-content" style="display:flex; flex-direction:column; align-items:center; width:100%;">
+        <h2>כיצד להציג את המקור?</h2>
+        <div id="meta-avatar-container" style="margin-bottom:16px;"></div>
+        <p>תן שם ברור למקור כדי שתוכל למצוא אותו בקלות בקטלוג.</p>
+        <input type="text" id="input-name" class="styled-input" placeholder="שם הערוץ / הסדרה" />
+        <button class="primary-btn" onclick="nextStep('type')">המשך לבחירת סוג ➔</button>
+        <button class="secondary-btn" onclick="nextStep('link')">חזור</button>
+      </div>
+    </div>
+
+    <!-- Step 3: Select Type -->
+    <div class="card" id="step-type">
+      <h2>מה סוג התוכן?</h2>
+      <p>האם הערוץ מכיל סדרה אחת בלבד או אוסף של סרטים וסדרות?</p>
+      
+      <div class="type-grid">
+        <div class="type-card" id="type-single" onclick="setType('single')">
+          <span class="icon">🎬</span>
+          <span class="label">סדרה אחת</span>
+        </div>
+        <div class="type-card" id="type-multi" onclick="setType('multi')">
+          <span class="icon">📂</span>
+          <span class="label">כמה סדרות (Multi)</span>
+        </div>
+      </div>
+      
+      <button class="primary-btn" id="send-btn" onclick="submitToTv()" style="margin-top: 24px;">שלח לטלוויזיה ✨</button>
+      <button class="secondary-btn" onclick="nextStep('meta')">חזור</button>
+    </div>
+
+    <!-- Step 4: Loading / Done -->
+    <div class="card" id="step-status">
+      <div id="status-loading" style="display:flex; flex-direction:column; align-items:center; gap:20px;">
+        <div class="loader"></div>
+        <h2>שולח לטלוויזיה...</h2>
+      </div>
+      <div id="status-done" style="display:none; flex-direction:column; align-items:center; gap:20px; color: var(--success);">
+         <span style="font-size:4rem;">✅</span>
+         <h2>נשלח בהצלחה!</h2>
+         <p>הטלוויזיה שלך התחילה לעבוד. אתה יכול לסגור את העמוד.</p>
+         <button class="primary-btn" onclick="window.location.reload()">הוסף מקור נוסף</button>
+      </div>
+      <div id="status-error" style="display:none; flex-direction:column; align-items:center; gap:20px; color: var(--danger);">
+         <span style="font-size:4rem;">❌</span>
+         <h2>משהו השתבש</h2>
+         <p id="error-text">לא הצלחנו להתחבר לטלוויזיה. וודא שאתה מחובר לאותה רשת Wi-Fi.</p>
+         <button class="primary-btn" onclick="nextStep('type')">נסה שוב</button>
+      </div>
+    </div>
+  </div>
 
 <script>
   const params = new URLSearchParams(window.location.search);
   const token = params.get('token');
-  const txt = params.get('text'); // For Web Share Target API
+  
+  let wizardData = {
+    link: '',
+    name: '',
+    type: 'single'
+  };
 
-  const input = document.getElementById('linkInput');
-  const btn = document.getElementById('sendBtn');
-  const statusEl = document.getElementById('status');
+  async function nextStep(stepId) {
+    if (stepId === 'meta') {
+      const link = document.getElementById('input-link').value.trim();
+      if (!link || !link.includes('t.me/')) {
+        document.getElementById('error-link').style.display = 'block';
+        return;
+      }
+      wizardData.link = link;
+      document.getElementById('error-link').style.display = 'none';
 
-  if (!token) {
-    statusEl.className = 'status error';
-    statusEl.innerHTML = 'Error: Link is invalid or expired. Please scan the QR code from your screen again.';
-    btn.disabled = true;
+      // Switch cards to 'meta' early to show fetching state
+      document.querySelectorAll('.card').forEach(c => c.classList.remove('active'));
+      document.getElementById(`step-meta`).classList.add('active');
+      
+      const metaFetching = document.getElementById('meta-fetching');
+      const metaContent = document.getElementById('meta-content');
+      metaFetching.style.display = 'flex';
+      metaContent.style.display = 'none';
+
+      try {
+        const res = await fetch('/api/share/info', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token, link: wizardData.link })
+        });
+        const data = await res.json();
+        
+        metaFetching.style.display = 'none';
+        metaContent.style.display = 'flex';
+        
+        const nameInput = document.getElementById('input-name');
+        const avatarCont = document.getElementById('meta-avatar-container');
+        
+        if (data.success) {
+           nameInput.value = data.title;
+           if (data.photo) {
+             avatarCont.innerHTML = `<img src="${data.photo}" style="width:80px;height:80px;border-radius:50%;border:3px solid var(--accent);object-fit:cover;">`;
+           } else {
+             avatarCont.innerHTML = `<div style="font-size:3rem;">📡</div>`;
+           }
+        } else {
+           // Fallback to URL parsing
+           const parts = link.split('/');
+           nameInput.value = parts[parts.length-1] || parts[parts.length-2];
+           avatarCont.innerHTML = `<div style="font-size:3rem;">📡</div>`;
+        }
+      } catch(e) {
+        metaFetching.style.display = 'none';
+        metaContent.style.display = 'flex';
+        const parts = link.split('/');
+        document.getElementById('input-name').value = parts[parts.length-1] || parts[parts.length-2];
+      }
+      return;
+    }
+
+    if (stepId === 'type') {
+      wizardData.name = document.getElementById('input-name').value.trim() || wizardData.link;
+    }
+
+    // Switch cards
+    document.querySelectorAll('.card').forEach(c => c.classList.remove('active'));
+    document.getElementById(`step-${stepId}`).classList.add('active');
   }
 
-  // Pre-fill if we received link via OS Share Dialog (Telegram generic text)
-  if (txt) {
-    const urls = txt.match(/https?:\/\/[^\s]+/g);
-    if (urls) input.value = urls[0];
-    else input.value = txt;
+  function setType(t) {
+    wizardData.type = t;
+    document.getElementById('type-single').classList.toggle('active', t === 'single');
+    document.getElementById('type-multi').classList.toggle('active', t === 'multi');
   }
 
-  btn.addEventListener('click', async () => {
-    const link = input.value.trim();
-    if (!link) return;
+  async function submitToTv() {
+    if (!token) {
+      alert('טוקן לא תקין. סרוק מחדש מהטלוויזיה.');
+      return;
+    }
 
-    btn.textContent = 'Sending...';
-    btn.disabled = true;
+    nextStep('status');
+    document.getElementById('status-loading').style.display = 'flex';
+    document.getElementById('status-done').style.display = 'none';
+    document.getElementById('status-error').style.display = 'none';
 
     try {
       const res = await fetch('/api/share/submit', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token, link })
+        body: JSON.stringify({ 
+          token, 
+          link: wizardData.link,
+          name: wizardData.name,
+          type: wizardData.type
+        })
       });
-      const data = await res.json();
       
+      const data = await res.json();
       if (data.success) {
-        statusEl.className = 'status success';
-        statusEl.innerText = 'Sent successfully! Watch your screen.';
-        input.value = '';
-        setTimeout(() => {
-           statusEl.innerText = '';
-           btn.textContent = 'Send Link';
-           btn.disabled = false;
-        }, 2000);
+        document.getElementById('status-loading').style.display = 'none';
+        document.getElementById('status-done').style.display = 'flex';
       } else {
-        throw new Error(data.error || 'Server error');
+        throw new Error(data.error || 'שגיאת שרת');
       }
     } catch (e) {
-      statusEl.className = 'status error';
-      statusEl.innerText = e.message;
-      btn.textContent = 'Try Again';
-      btn.disabled = false;
+      document.getElementById('status-loading').style.display = 'none';
+      document.getElementById('status-error').style.display = 'flex';
+      document.getElementById('error-text').innerText = e.message;
     }
-  });
+  }
 
+  // Pre-select single by default
+  setType('single');
 </script>
 
 </body>
