@@ -12,9 +12,16 @@ const SpatialNav = (() => {
     const loader = document.getElementById('initial-loader');
     const sync = document.getElementById('sync-overlay');
     const update = document.getElementById('update-overlay-popup');
+    
+    // Check if loader is visible
     const loaderVisible = loader && window.getComputedStyle(loader).display !== 'none';
     const syncVisible = sync && window.getComputedStyle(sync).display !== 'none';
     const updateVisible = update && window.getComputedStyle(update).display !== 'none';
+
+    // SPECIAL CASE: If the loader is visible but contains focusable elements (like Retry/Logout buttons),
+    // we should NOT block navigation, as the user needs to interact with the error screen.
+    if (loaderVisible && loader.querySelector('.focusable')) return false;
+
     return loaderVisible || syncVisible || updateVisible;
   }
 

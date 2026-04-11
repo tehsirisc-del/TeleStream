@@ -63,7 +63,7 @@ async function checkExistingSession() {
     const me = await client.getMe();
     if (me) {
       isAuthed = true;
-      currentUserId = Number(me.id);
+      currentUserId = me.id.toString();
       return true;
     }
   } catch (e) {
@@ -132,7 +132,7 @@ function startQrLogin(onQrCode, onSuccess, onError) {
     isAuthed = true;
     saveSession();
     const me = await client.getMe();
-    currentUserId = Number(me.id);
+    currentUserId = me.id.toString();
     if (onSuccess) onSuccess(currentUserId);
   }).catch(e => {
     qrError = e.message;
@@ -168,7 +168,7 @@ function startPhoneLogin(phone, onState, onSuccess, onError) {
     phoneAuthState = 'success';
     saveSession();
     const me = await client.getMe();
-    currentUserId = Number(me.id);
+    currentUserId = me.id.toString();
     if (onSuccess) onSuccess(currentUserId);
   }).catch(e => {
     phoneAuthState = 'error';
@@ -223,67 +223,142 @@ async function getMessages(channelArg, options) {
   return client.getMessages(channelArg, options);
 }
 
-// ── Sync channel (sources storage) ────────────────────────────────────
-
 const SYNC_CHANNEL_NAME = 'StreamApp Data';
+const SYNC_SCRAMBLE_KEY = 'TeleStreamSyncKey!#2024';
 
-async function syncSourcesFromTelegram(userId) {
+let cachedSyncChannelId = null;
+
+/**
+ * scramble(text)
+ * Simple XOR obfuscation to keep sync data private in the Telegram channel.
+ */
+function scrambleSyncData(str) {
   try {
-    const dialogs = await client.getDialogs({ limit: 100 });
-    const syncChannel = dialogs.find(d => d.title === SYNC_CHANNEL_NAME && (d.isChannel || d.isGroup));
-    if (!syncChannel) return null;
-
-    const messages = await client.getMessages(syncChannel.id, { limit: 10 });
-    const syncMsg = messages.find(m => m.message && m.message.startsWith('#StreamAppSources'));
-    if (!syncMsg) return null;
-
-    const lines = syncMsg.message.split('\n');
-    const dataStr = lines.slice(1).join('\n').trim();
-    if (dataStr.startsWith('[')) return JSON.parse(dataStr);
-    
-    // Decode base64 and support UTF-8 (Hebrew)
-    let decodedStr = atob(dataStr);
-    try { decodedStr = decodeURIComponent(escape(decodedStr)); } catch(e) {}
-    
-    return JSON.parse(decodedStr);
+    const utf8 = unescape(encodeURIComponent(str));
+    let result = '';
+    for (let i = 0; i < utf8.length; i++) {
+      result += String.fromCharCode(utf8.charCodeAt(i) ^ SYNC_SCRAMBLE_KEY.charCodeAt(i % SYNC_SCRAMBLE_KEY.length));
+    }
+    return btoa(result);
   } catch (e) {
-    console.error('[Sync] Read error:', e.message);
-    return null;
+    console.error('[Sync] Scramble failed:', e);
+    return btoa(str); // Fallback to raw base64 if failed
   }
 }
 
-async function syncSourcesToTelegram(userId) {
+/**
+ * unscramble(b64)
+ */
+function unscrambleSyncData(b64) {
   try {
-    const payload = await window.DB.getSyncPayload(userId);
-    // Encode safely to Base64 supporting UTF-8 (Hebrew)
-    const base64Str = btoa(unescape(encodeURIComponent(JSON.stringify(payload))));
-    const messageText = `#StreamAppSources\n${base64Str}`;
+    const raw = atob(b64.replace(/[\n\r\s]/g, ''));
+    let result = '';
+    for (let i = 0; i < raw.length; i++) {
+      result += String.fromCharCode(raw.charCodeAt(i) ^ SYNC_SCRAMBLE_KEY.charCodeAt(i % SYNC_SCRAMBLE_KEY.length));
+    }
+    return decodeURIComponent(escape(result));
+  } catch (e) {
+    // If unscramble fails (e.g. legacy non-scrambled data), try raw atob as fallback
+    try {
+        const raw = atob(b64.replace(/[\n\r\s]/g, ''));
+        return decodeURIComponent(escape(raw));
+    } catch(e2) {
+        return null;
+    }
+  }
+}
 
-    const dialogs = await client.getDialogs({ limit: 50 });
-    let syncChannel = dialogs.find(d => d.title === SYNC_CHANNEL_NAME && (d.isChannel || d.isGroup));
+/**
+ * ensureSyncChannel()
+ * Returns the peer ID of the sync channel, creating it if necessary.
+ */
+async function ensureSyncChannel() {
+  if (cachedSyncChannelId) return cachedSyncChannelId;
 
-    if (!syncChannel) {
-      // Create sync channel
-      const { Api } = TelegramModule;
+  const dialogs = await client.getDialogs({ limit: 100 });
+  // Search by title OR by the entity if title fails (sometimes dialogs have empty titles but entities have titles)
+  let syncChannel = dialogs.find(d => {
+    const title = d.title || d.entity?.title;
+    return title === SYNC_CHANNEL_NAME && (d.isChannel || d.isGroup || d.entity?.className === 'Channel' || d.entity?.className === 'Chat');
+  });
+
+  if (!syncChannel) {
+    console.log('[Sync] Creating storage channel...');
+    const { Api } = TelegramModule;
+    try {
       const result = await client.invoke(new Api.channels.CreateChannel({
         title: SYNC_CHANNEL_NAME,
-        about: 'Storage for StreamCatz configurations.',
+        about: 'Private storage for TeleStream synchronizations.',
         broadcast: true
       }));
-      const channelId = result.chats[0].id;
-      await client.sendMessage(channelId, { message: messageText });
-    } else {
-      const channelPeer = syncChannel.entity || syncChannel.id;
-      const messages = await client.getMessages(channelPeer, { limit: 50 });
-      const syncMsg = messages.find(m => m.message && m.message.startsWith('#StreamAppSources'));
-      if (syncMsg) {
-        await client.editMessage(channelPeer, { message: syncMsg.id, text: messageText });
-      } else {
-        await client.sendMessage(channelPeer, { message: messageText });
-      }
+      cachedSyncChannelId = result.chats[0].id.toString();
+    } catch (e) {
+      console.error('[Sync] Channel creation failed:', e);
+      return null;
     }
+  } else {
+    cachedSyncChannelId = (syncChannel.entity?.id || syncChannel.id).toString();
+  }
+  return cachedSyncChannelId;
+}
+
+/**
+ * pushSyncData(tag, payload)
+ * Edits or sends a message with the given tag (e.g. #StreamAppProgress)
+ */
+async function pushSyncData(tag, payload) {
+  try {
+    const channelPeer = await ensureSyncChannel();
+    if (!channelPeer) return;
+
+    const json = JSON.stringify(payload);
+    // Apply privacy scrambling
+    const scrambled = scrambleSyncData(json);
+    const messageText = `${tag}\n${scrambled}`;
+
+    // Look deep to find existing tags so we don't leave zombie duplicates when pushing new data
+    const messages = await client.getMessages(channelPeer, { limit: 500 });
+    const existing = messages.find(m => m.message && m.message.startsWith(tag));
+
+    if (existing) {
+      // Deleting and re-sending ensures the metadata "bubbles" to the top of the history.
+      // Editing would keep it buried, potentially beyond the pullSyncData search limit.
+      await client.deleteMessages(channelPeer, [existing.id], { revoke: true });
+    }
+    await client.sendMessage(channelPeer, { message: messageText });
+    console.log(`[Sync] Pushed ${tag} (New message at top)`);
   } catch (e) {
-    console.error('[Sync] Write error:', e.message);
+    console.error(`[Sync] Push failed for ${tag}:`, e.message);
+  }
+}
+
+/**
+ * pullSyncData(tag)
+ * Returns the parsed JSON payload for a specific tag.
+ */
+async function pullSyncData(tag) {
+  try {
+    const channelPeer = await ensureSyncChannel();
+    if (!channelPeer) return null;
+
+    // Deep Sync: Increase lookback tremendously (500) to ensure we don't miss tags buried under progress updates
+    const messages = await client.getMessages(channelPeer, { limit: 500 });
+    const msg = messages.find(m => m.message && m.message.includes(tag));
+    if (!msg) return null;
+
+    const text = msg.message;
+    const tagIdx = text.indexOf(tag);
+    const dataStr = text.substring(tagIdx + tag.length).trim();
+    if (!dataStr) return null;
+
+    // Apply unscrambling
+    const jsonStr = unscrambleSyncData(dataStr);
+    if (!jsonStr) return null;
+    
+    return JSON.parse(jsonStr);
+  } catch (e) {
+    console.error(`[Sync] Pull failed for ${tag}:`, e.message);
+    return null;
   }
 }
 
@@ -344,7 +419,7 @@ window.TGClient = {
   startQrLogin, startPhoneLogin, submitPhoneCode, submitPassword,
   getDialogs, getEntity, resolveChannelFromLink,
   iterMessages, getMessages,
-  syncSourcesFromTelegram, syncSourcesToTelegram,
+  pushSyncData, pullSyncData,
   downloadProfilePhoto, iterDownload, getMessageMeta,
   logout,
   get isAuthed() { return isAuthed; },

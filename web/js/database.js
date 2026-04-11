@@ -117,16 +117,24 @@ db.version(4).stores({
   console.log(`[DB Migration v4] Complete. ${titleMap.size} canonical series created.`);
 });
 
+// ── v5: Sync Optimization ────────────────────────────────────────────────
+// Added compound index [channel+messageId] for O(1) lookups during sync.
+db.version(5).stores({
+  episodes:      '++id, seasonId, episodeNumber, messageId, channel, sourceId, is_manual, is_video, is_audio, [channel+messageId]',
+});
+
 // ── Sources ──────────────────────────────────────────────────────────
 
 async function addSource(name, link, isSingleSeries, userId) {
-  const existing = await db.sources.where({ userId, link }).first();
+  const uId = userId ? userId.toString() : null;
+  const existing = await db.sources.where({ userId: uId, link }).first();
   if (existing) throw new Error('Source link already exists for this user');
-  return db.sources.add({ userId, name, link, is_single_series: isSingleSeries ? 1 : 0, photo_base64: null });
+  return db.sources.add({ userId: uId, name, link, is_single_series: isSingleSeries ? 1 : 0, photo_base64: null });
 }
 
 async function getSources(userId) {
-  return db.sources.where('userId').equals(userId).toArray();
+  const uId = userId ? userId.toString() : null;
+  return db.sources.where('userId').equals(uId).toArray();
 }
 
 async function getSourceById(id) {
@@ -134,7 +142,8 @@ async function getSourceById(id) {
 }
 
 async function getSourceByLink(link, userId) {
-  return db.sources.where({ userId, link }).first();
+  const uId = userId ? userId.toString() : null;
+  return db.sources.where({ userId: uId, link }).first();
 }
 
 async function deleteSource(id) {
@@ -275,25 +284,39 @@ async function linkSourceToSeries(sourceId, canonicalSeriesId) {
  * Returns a canonical series, including the best available poster photo
  * pulled from any of its linked sources.
  */
-async function getCanonicalSeriesById(id) {
+/**
+ * getCanonicalSeriesById(id, opts)
+ * Returns a canonical series with its photo.
+ * opts.seriesSourcesForId: pre-loaded junction rows (avoids extra DB call from hot paths)
+ * opts.sourcesById: Map<id, source> (avoids extra DB call)
+ */
+async function getCanonicalSeriesById(id, opts = {}) {
   const cs = await db.canonicalSeries.get(id);
   if (!cs) return null;
 
-  // Find linked sources and pick the first one that has a photo
-  const links = await db.seriesSources.where('canonicalSeriesId').equals(id).toArray();
   let photo = null;
-  for (const link of links) {
-    const src = await db.sources.get(link.sourceId);
-    if (src && src.photo_base64) { photo = src.photo_base64; break; }
+  if (opts.seriesSourcesForId && opts.sourcesById) {
+    // Fast path: use pre-loaded data (no extra DB round-trips)
+    for (const link of opts.seriesSourcesForId) {
+      const src = opts.sourcesById.get(link.sourceId);
+      if (src && src.photo_base64) { photo = src.photo_base64; break; }
+    }
+  } else {
+    // Slow path (single item lookup, not in bulk loop)
+    const links = await db.seriesSources.where('canonicalSeriesId').equals(id).toArray();
+    for (const link of links) {
+      const src = await db.sources.get(link.sourceId);
+      if (src && src.photo_base64) { photo = src.photo_base64; break; }
+    }
   }
 
   return {
-    id:           cs.id,
-    title:        cs.display_title,
-    display_title: cs.display_title,
+    id:              cs.id,
+    title:           cs.display_title,
+    display_title:   cs.display_title,
     canonical_title: cs.canonical_title,
-    source_photo: photo,
-    is_favorite:  false, // Caller populates this
+    source_photo:    photo,
+    is_favorite:     false,
   };
 }
 
@@ -319,7 +342,11 @@ async function getOrCreateSeries(sourceId, title) {
 /**
  * getAllSeries(userId)
  * Returns all canonical series that have at least one source belonging to this user.
- * This is the primary catalog query — now source-independent.
+ * v2: Bulk-load approach — avoids N+1 IPC round-trips to IndexedDB.
+ *
+ * OLD approach: for each canonical series → count() seasons → count() episodes (N*M awaits).
+ * NEW approach: load sources, junction, seasons, episodes, sources in 4 parallel bulk fetches,
+ *               then filter/map in JS memory. Dramatically faster on Android WebView IPC.
  */
 async function getAllSeries(userId) {
   // 1. Get all sources for this user
@@ -327,26 +354,71 @@ async function getAllSeries(userId) {
   if (sources.length === 0) return [];
   const sourceIds = new Set(sources.map(s => s.id));
 
-  // 2. Find all canonical series linked to these sources
+  // 2. Bulk-load junction rows for this user's sources
   const links = await db.seriesSources
     .filter(l => sourceIds.has(l.sourceId))
     .toArray();
+  if (links.length === 0) return [];
+
   const canonicalIds = [...new Set(links.map(l => l.canonicalSeriesId))];
 
-  // 3. Build result list
+  // 3. Bulk-load all seasons and all episodes in parallel (2 IPC calls total vs N*M)
+  const [allSeasons, allEpisodes, allCanonical] = await Promise.all([
+    db.seasons.toArray(),
+    db.episodes.toArray(),
+    db.canonicalSeries.bulkGet(canonicalIds),
+  ]);
+
+  // Build fast lookup maps — O(n) memory, O(1) lookup
+  const seasonsByCanonicalId = new Map(); // canonicalId → Season[]
+  for (const s of allSeasons) {
+    const cId = s.canonicalSeriesId || s.seriesId;
+    if (!cId || !canonicalIds.includes(cId)) continue;
+    if (!seasonsByCanonicalId.has(cId)) seasonsByCanonicalId.set(cId, []);
+    seasonsByCanonicalId.get(cId).push(s);
+  }
+
+  const episodeCountBySeasonId = new Map(); // seasonId → count
+  for (const e of allEpisodes) {
+    episodeCountBySeasonId.set(e.seasonId, (episodeCountBySeasonId.get(e.seasonId) || 0) + 1);
+  }
+
+  // Build source map for photo resolution
+  const sourcesById = new Map(sources.map(s => [s.id, s]));
+
+  // Build junction map: canonicalId → link[]
+  const junctionByCanonicalId = new Map();
+  for (const l of links) {
+    if (!junctionByCanonicalId.has(l.canonicalSeriesId)) junctionByCanonicalId.set(l.canonicalSeriesId, []);
+    junctionByCanonicalId.get(l.canonicalSeriesId).push(l);
+  }
+
+  // 4. Build result list — all in memory, zero additional DB calls
   const result = [];
-  for (const cId of canonicalIds) {
-    // Check if this series has any episodes before adding to catalog
-    const seasons = await db.seasons.where('canonicalSeriesId').equals(cId).toArray();
-    let totalEpisodes = 0;
-    for (const s of seasons) {
-      totalEpisodes += await db.episodes.where('seasonId').equals(s.id).count();
+  for (const cs of allCanonical) {
+    if (!cs) continue;
+
+    // Check if this canonical series has any episodes (without issuing a DB count)
+    const seasons = seasonsByCanonicalId.get(cs.id) || [];
+    const totalEpisodes = seasons.reduce((acc, s) => acc + (episodeCountBySeasonId.get(s.id) || 0), 0);
+    if (totalEpisodes === 0) continue;
+
+    // Resolve photo from pre-loaded maps
+    let photo = null;
+    const junctionRows = junctionByCanonicalId.get(cs.id) || [];
+    for (const l of junctionRows) {
+      const src = sourcesById.get(l.sourceId);
+      if (src && src.photo_base64) { photo = src.photo_base64; break; }
     }
-    
-    if (totalEpisodes > 0) {
-      const cs = await getCanonicalSeriesById(cId);
-      if (cs) result.push(cs);
-    }
+
+    result.push({
+      id:              cs.id,
+      title:           cs.display_title,
+      display_title:   cs.display_title,
+      canonical_title: cs.canonical_title,
+      source_photo:    photo,
+      is_favorite:     false,
+    });
   }
 
   return result.sort((a, b) => a.title.localeCompare(b.title));
@@ -464,20 +536,38 @@ async function getEpisodesBySeasonId(seasonId, userId) {
   episodes.sort((a, b) => a.episodeNumber - b.episodeNumber);
 
   if (userId) {
+    const uId = userId.toString();
     const favSet = new Set(
-      (await db.favorites.where({ userId, itemType: 'episode' }).toArray()).map(f => f.itemId)
+      (await db.favorites.where({ userId: uId, itemType: 'episode' }).toArray()).map(f => f.itemId)
     );
-    const progMap = new Map(
-      (await db.watchProgress.where({ userId }).toArray()).map(p => [p.episodeId, p])
-    );
+    
+    // Canonical Progress Logic:
+    // Shared progress for all episodes with the same [seasonId + episodeNumber].
+    // 1. Get all progress entries for all episode IDs in this specific season.
+    const allEpIds = episodes.map(e => e.id);
+    const seasonProgress = await db.watchProgress
+      .where('episodeId').anyOf(allEpIds)
+      .and(p => p.userId === uId)
+      .toArray();
+
+    // 2. Map episodeNumber -> most recent progress entry
+    const progressByNumber = new Map();
+    seasonProgress.forEach(p => {
+      const ep = episodes.find(e => e.id === p.episodeId);
+      if (ep) {
+        const existing = progressByNumber.get(ep.episodeNumber);
+        if (!existing || p.updated_at > existing.updated_at) {
+          progressByNumber.set(ep.episodeNumber, p);
+        }
+      }
+    });
+
+    // 3. Apply canonical progress to all episodes
     episodes.forEach(e => {
       e.is_favorite = favSet.has(e.id);
-      const prog = progMap.get(e.id);
+      const prog = progressByNumber.get(e.episodeNumber);
       if (prog) {
         e.progress_seconds = prog.progress_seconds;
-        // CRITICAL: Map stored progress duration to e.progress_duration (separate from indexed duration)
-        // e.duration = the indexed duration from Telegram metadata (may be 0 for MKV)
-        // e.progress_duration = the real duration saved when we last exited the player
         e.progress_duration = prog.duration;
         e.is_watched = prog.is_watched;
       }
@@ -514,8 +604,9 @@ async function updateUserSettings(userId, autoNextEnabled, autoNextCountdown, ui
 // ── Progress ──────────────────────────────────────────────────────────
 
 async function updateProgress(userId, episodeId, progressSeconds, duration, isWatched) {
+  const uId = userId ? userId.toString() : null;
   await db.watchProgress.put({
-    userId, episodeId,
+    userId: uId, episodeId,
     progress_seconds: progressSeconds, duration,
     is_watched: isWatched ? 1 : 0,
     updated_at: Date.now()
@@ -523,27 +614,36 @@ async function updateProgress(userId, episodeId, progressSeconds, duration, isWa
 }
 
 async function getAllProgress(userId) {
-  return db.watchProgress.where({ userId }).toArray();
+  const uId = userId ? userId.toString() : null;
+  return db.watchProgress.where({ userId: uId }).toArray();
 }
 
 async function deleteProgress(userId, episodeId) {
-  await db.watchProgress.where({ userId, episodeId }).delete();
+  const uId = userId ? userId.toString() : null;
+  await db.watchProgress.where({ userId: uId, episodeId }).delete();
 }
 
 async function getContinueWatching(userId) {
-  const progList = (await db.watchProgress.where({ userId }).toArray())
+  const progList = (await db.watchProgress.where({ userId: userId.toString() }).toArray())
     .filter(p => !p.is_watched && p.progress_seconds > 5)
     .sort((a, b) => b.updated_at - a.updated_at);
 
   const result = [];
+  const seenCanonical = new Set();
+
   for (const p of progList) {
     const ep = await db.episodes.get(p.episodeId);
     if (!ep) continue;
     const season = await db.seasons.get(ep.seasonId);
     if (!season) continue;
 
-    // v4 path: resolve series title via canonical series
     const canonicalId = season.canonicalSeriesId || season.seriesId;
+    const canonicalKey = `${canonicalId}:${season.seasonNumber}:${ep.episodeNumber}`;
+    
+    // Deduplication: Only show the most recent version of this specific episode
+    if (seenCanonical.has(canonicalKey)) continue;
+    seenCanonical.add(canonicalKey);
+
     let seriesTitle = 'Unknown';
     let seriesId    = canonicalId;
     let sourcePhoto = null;
@@ -552,14 +652,12 @@ async function getContinueWatching(userId) {
     if (cs) {
       seriesTitle = cs.display_title;
       seriesId    = cs.id;
-      // Pick best photo from any linked source
       const links = await db.seriesSources.where('canonicalSeriesId').equals(cs.id).toArray();
       for (const link of links) {
         const src = await db.sources.get(link.sourceId);
         if (src?.photo_base64) { sourcePhoto = src.photo_base64; break; }
       }
     } else {
-      // Fallback: legacy series row (pre-migration data)
       const legacySeries = await db.series.get(season.seriesId);
       if (legacySeries) {
         const src = await db.sources.get(legacySeries.sourceId);
@@ -586,15 +684,18 @@ async function getContinueWatching(userId) {
 // ── Favorites ─────────────────────────────────────────────────────────
 
 async function addFavorite(userId, itemType, itemId) {
-  await db.favorites.put({ userId, itemType, itemId, added_at: Date.now() });
+  const uId = userId ? userId.toString() : null;
+  await db.favorites.put({ userId: uId, itemType, itemId, added_at: Date.now() });
 }
 
 async function removeFavorite(userId, itemType, itemId) {
-  await db.favorites.where({ userId, itemType, itemId }).delete();
+  const uId = userId ? userId.toString() : null;
+  await db.favorites.where({ userId: uId, itemType, itemId }).delete();
 }
 
 async function getFavorites(userId) {
-  return db.favorites.where({ userId }).reverse().sortBy('added_at');
+  const uId = userId ? userId.toString() : null;
+  return db.favorites.where({ userId: uId }).reverse().sortBy('added_at');
 }
 
 async function getFavoritesDetails(userId) {
@@ -801,6 +902,156 @@ async function clearAllData() {
   return db.open();
 }
 
+// ── Granular Sync Payloads (Expansion) ──────────────────────────────
+
+/**
+ * Sources Sync: Simple array of source objects.
+ */
+async function getSourcesSyncPayload(userId) {
+  const sources = await getSources(userId);
+  // Using compact keys: n=name, l=link, s=is_single_series
+  return sources.map(s => ({ n: s.name, l: s.link, s: s.is_single_series }));
+}
+
+async function applySourcesSync(userId, sourcesList) {
+  if (!Array.isArray(sourcesList) || sourcesList.length === 0) {
+      console.warn('[DB] applySourcesSync: Empty or invalid list, skipping to prevent wipe.');
+      return [];
+  }
+  const uId = userId ? userId.toString() : null;
+
+  // 1. Reconciliation: Delete local sources that are NOT in the incoming Telegram list.
+  // This ensures that if a user deletes a source on one device, it's removed from all.
+  const localSources = await getSources(uId);
+  const incomingLinks = new Set(sourcesList.map(s => s.l || s.link));
+
+  for (const local of localSources) {
+    if (!incomingLinks.has(local.link)) {
+      console.log('[Sync] Deleting orphan local source:', local.link);
+      await deleteSource(local.id);
+    }
+  }
+
+  // 2. Map compact keys back to database fields and update/add
+  for (const src of sourcesList) {
+    const name = src.n || src.name;
+    const link = src.l || src.link;
+    const isSingle = src.s !== undefined ? src.s : src.is_single_series;
+    
+    const existing = await getSourceByLink(link, uId);
+    if (!existing) {
+        await addSource(name, link, isSingle === 1, uId);
+    } else {
+        await db.sources.update(existing.id, { name, is_single_series: isSingle === 1 ? 1 : 0 });
+    }
+  }
+
+  return getSources(uId);
+}
+
+/**
+ * Favorites Sync: Maps local IDs to universal keys (canonical titles or channel/msgId).
+ */
+async function getFavoritesSyncPayload(userId) {
+  const favs = await getFavorites(userId);
+  const payload = [];
+  for (const f of favs) {
+    // Compact: t=type, k=key (canonical_title), c=channel, m=messageId
+    if (f.itemType === 'series') {
+      const cs = await db.canonicalSeries.get(f.itemId);
+      if (cs) payload.push({ t: 's', k: cs.canonical_title });
+    } else if (f.itemType === 'episode') {
+      const ep = await db.episodes.get(f.itemId);
+      if (ep) payload.push({ t: 'e', c: ep.channel, m: ep.messageId });
+    }
+  }
+  return payload;
+}
+
+async function applyFavoritesSync(userId, favoritesList) {
+  if (!Array.isArray(favoritesList)) return;
+  const uId = userId ? userId.toString() : null;
+
+  await db.transaction('rw', db.favorites, db.canonicalSeries, db.episodes, async () => {
+    for (const f of favoritesList) {
+      const type = f.t || f.type;
+      if (type === 's' || type === 'series') {
+        const key = f.k || f.key;
+        const cs = await db.canonicalSeries.where('canonical_title').equals(key).first();
+        if (cs) await db.favorites.put({ userId: uId, itemType: 'series', itemId: cs.id });
+      } else if (type === 'e' || type === 'episode') {
+        const channel = f.c || f.channel;
+        const messageId = f.m || f.messageId;
+        const ep = await db.episodes.where({ channel, messageId }).first();
+        if (ep) await db.favorites.put({ userId: uId, itemType: 'episode', itemId: ep.id });
+      }
+    }
+  });
+}
+
+/**
+ * Progress Sync: Uses [channel+messageId] as the portable unique key.
+ * LIMITED to 60 most recent items to stay within Telegram's 4KB message limit.
+ */
+async function getProgressSyncPayload(userId) {
+  const allProgress = await db.watchProgress.where({ userId }).toArray();
+  
+  // Sort by updated_at DESC to keep the most recent activity
+  allProgress.sort((a, b) => b.updated_at - a.updated_at);
+
+  const payload = [];
+  // Hard limit: 60 items (approx 3.5KB payload after Base64)
+  const recentProgress = allProgress.slice(0, 60);
+
+  for (const p of recentProgress) {
+    const ep = await db.episodes.get(p.episodeId);
+    if (ep) {
+      const entry = {
+        c: ep.channel,
+        m: ep.messageId,
+        w: p.is_watched,
+        t: p.updated_at
+      };
+      // For "In Progress" items, include precise seconds/duration.
+      // For "Fully Watched" items, we save space by only syncing the 'watched' status.
+      if (!p.is_watched) {
+        entry.p = p.progress_seconds;
+        entry.d = p.duration;
+      }
+      payload.push(entry);
+    }
+  }
+  return payload;
+}
+
+async function applyProgressSync(userId, progressList) {
+  if (!Array.isArray(progressList)) return;
+  const uId = userId ? userId.toString() : null;
+
+  await db.transaction('rw', db.watchProgress, db.episodes, async () => {
+    for (const p of progressList) {
+      // Map compact keys back: c=channel, m=messageId, p=progress, d=duration, w=isWatched, t=updatedAt
+      const channel = p.c;
+      const messageId = p.m;
+      const ep = await db.episodes.where({ channel, messageId }).first();
+      if (!ep) continue;
+
+      const local = await db.watchProgress.get([uId, ep.id]);
+      // Conflict Resolution: Only update if remote timestamp is newer
+      if (!local || p.t > local.updated_at) {
+        await db.watchProgress.put({
+          userId: uId,
+          episodeId: ep.id,
+          progress_seconds: p.p,
+          duration: p.d,
+          is_watched: p.w,
+          updated_at: p.t
+        });
+      }
+    }
+  });
+}
+
 // Export all
 window.DB = {
   db,
@@ -826,6 +1077,10 @@ window.DB = {
   updateProgress, getAllProgress, deleteProgress, getContinueWatching,
   addFavorite, removeFavorite, getFavorites, getFavoritesDetails,
 
-  // Sync
-  getSyncPayload, clearAllData,
+  // Sync (Granular)
+  getSourcesSyncPayload, applySourcesSync,
+  getFavoritesSyncPayload, applyFavoritesSync,
+  getProgressSyncPayload, applyProgressSync,
+  
+  clearAllData,
 };

@@ -219,18 +219,21 @@ class Indexer {
         // Instead of overriding with the channel name, we find the HIGHEST confidence extraction
         // within this batch and apply it to all episodes.
         if (source.is_single_series && batchToInsert.length > 0) {
-           let bestTitle = source.name;
-           let maxConf   = 0;
-           for (const item of batchToInsert) {
-             if (item.parsed.confidence > maxConf && item.parsed.season > 0) {
-               maxConf   = item.parsed.confidence;
-               bestTitle = item.parsed.seriesTitle;
-             }
-           }
+           // GLOBAL FIX: For Single Series sources, the User-provided name is the INTENT.
+           // We prioritize it 100% over filename-extracted titles to ensure grouping 
+           // even if languages differ (e.g., Hebrew Source Name vs English filenames).
+           
+           // Aggressive cleanup: strip "Season X", "Vol X", "עונה X" etc. from the identity key.
+           let cleanName = source.name
+             .replace(/[-_.\s]*(?:season|עונה|s|vol|volume|part|batch|פרקים|פרק)\s*[-_.\s]*\d+\s*(?:[-_.\s].*)?$/i, '')
+             .trim();
+
+           const bestTitle = cleanName || source.name;
+           
            for (const item of batchToInsert) {
              item.parsed.seriesTitle = bestTitle;
-             // Single series boost so resolver merges aggressively
-             item.parsed.confidence = Math.max(item.parsed.confidence, 0.95);
+             // High confidence override so resolver follows the User's named intent.
+             item.parsed.confidence = 1.0; 
            }
         }
 

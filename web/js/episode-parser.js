@@ -258,11 +258,17 @@ function parseEpisode(rawFileName, captionText = '', fallback = null) {
  */
 function normalizeSeriesTitle(title) {
   if (!title) return '';
-  return title
-    .toLowerCase()
     // Keep ASCII letters, digits, Hebrew characters (U+05D0–U+05EA range)
-    .replace(/[^a-z0-9\u05d0-\u05ea]/g, '')
-    .trim();
+    let norm = title.toLowerCase()
+      .replace(/[^a-z0-9\u05d0-\u05ea\s]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+      
+    // Identity Sanity: common noise words that split identities unnecessarily
+    norm = norm.replace(/\b(hd|4k|official|full|series|סדרה|תרגום|מובנה|מלא|full hd)\b/gi, '');
+    
+    // Final compact key
+    return norm.replace(/\s+/g, '').trim();
 }
 
 // Export for browser globals (Android TV WebView / Capacitor)

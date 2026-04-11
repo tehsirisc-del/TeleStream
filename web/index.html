@@ -212,6 +212,23 @@
           <p style="color:#64748b; font-size:0.82rem; margin-top:12px;">
             App Version: <span id="app-version-display">v1.3.1</span>
           </p>
+
+          <div style="border-top:1px solid #334155; margin-top:30px; padding-top:25px;">
+            <h4 style="color:#ef4444; margin-bottom:10px;">Safe Reset</h4>
+            <p style="color:#94a3b8; font-size:0.85rem; margin-bottom:15px;">
+              Wipes all locally cached data (Sources, History, Favorites) but keeps your Telegram account connected. Useful for resolving data issues.
+            </p>
+            <button class="btn btn-secondary focusable" id="clear-cache-btn" tabindex="0"
+              style="border:1px solid #ef444455; color:#f87171;"
+              onclick="handleClearCache()">
+              🧹 Clear Local Cache
+            </button>
+            <button class="btn btn-secondary focusable" id="force-sync-btn" tabindex="0"
+              style="margin-top:10px;"
+              onclick="handleForceSync()">
+              🔄 Force Cloud Sync
+            </button>
+          </div>
         </div>
 
       </div>
@@ -782,6 +799,7 @@ async function loadCatalogSeries(skipFocus = false) {
     for (let i = 0; i < 8; i++) {
         const ph = document.createElement('div');
         ph.className = 'placeholder-card series-card';
+        ph.dataset.placeholderId = 'ph_' + i; // Identification for sweep
         row.appendChild(ph);
     }
   }
@@ -802,24 +820,18 @@ async function loadCatalogSeries(skipFocus = false) {
 
     const existingCards = new Map([...row.children].map(c => [c.dataset.seriesId || c.dataset.sourceId, c]));
     if (!isRefreshing) row.innerHTML = '';
+    const renderedIds = new Set();
 
     // 1. Show existing canonical series
     seriesList.forEach(s => {
       const isFav = favs.has(s.id);
       let card = existingCards.get(String(s.id));
+      renderedIds.add(String(s.id));
 
-      // For indexing badge: a canonical series may be fed by multiple sources.
-      // Check if ANY linked source is currently indexing.
-      // sources list is already loaded above; filter by junction (stored in card dataset later)
-      // Simple approach: check all sources for one that matches canonical via seriesSources.
-      // At render time we approximate: if any source's name is contained in the series title, flag it.
-      // Accurate approach runs async — use cached dataset after first render.
       let istate = null;
-      // Check if the card was previously associated with a source ID (stored in dataset)
       if (card && card.dataset.primarySourceId) {
         istate = indexerStates.get(parseInt(card.dataset.primarySourceId));
       } else {
-        // Fallback: check all sources, pick first whose name or link loosely matches
         for (const src of sources) {
           const st = indexerStates.get(src.id);
           if (st && (st.status === 'indexing' || st.status === 'queued')) {
@@ -835,73 +847,170 @@ async function loadCatalogSeries(skipFocus = false) {
           card.className = 'card series-card focusable';
           card.tabIndex = 0;
           card.dataset.seriesId = s.id;
+
+          const overlay = document.createElement('div');
+          overlay.className = 'card-overlay';
+          card.appendChild(overlay);
+
+          const favBadge = document.createElement('div');
+          favBadge.className = 'card-fav-badge';
+          favBadge.style.cssText = 'position:absolute;top:10px;right:10px;font-size:1.2rem;z-index:2;display:none;';
+          favBadge.textContent = '❤️';
+          card.appendChild(favBadge);
+
+          const cardBody = document.createElement('div');
+          cardBody.className = 'card-body';
+
+          const avatarImg = document.createElement('img');
+          avatarImg.className = 'card-avatar';
+          avatarImg.loading = 'lazy';
+          avatarImg.style.display = 'none';
+          cardBody.appendChild(avatarImg);
+
+          const avatarPlaceholder = document.createElement('div');
+          avatarPlaceholder.className = 'card-avatar-placeholder';
+          cardBody.appendChild(avatarPlaceholder);
+
+          const titleEl = document.createElement('h3');
+          cardBody.appendChild(titleEl);
+          card.appendChild(cardBody);
+
+          const statusText = document.createElement('div');
+          statusText.className = 'card-status-text';
+          statusText.style.display = 'none';
+          card.appendChild(statusText);
+
+          const progressContainer = document.createElement('div');
+          progressContainer.className = 'card-progress-container';
+          progressContainer.style.display = 'none';
+          const progressBar = document.createElement('div');
+          progressBar.className = 'card-progress-bar';
+          progressContainer.appendChild(progressBar);
+          card.appendChild(progressContainer);
+
+          card.onclick = () => {
+            if (lastFocusedSeriesId !== s.id) {
+                lastFocusedSeasonId = null;
+                lastFocusedEpisodeId = null;
+            }
+            lastFocusedSeriesId = s.id;
+            loadSeasons(s);
+          };
           row.appendChild(card);
       }
 
-      const avatarHtml = s.source_photo
-        ? `<img class="card-avatar" src="${s.source_photo}" loading="lazy">`
-        : `<div class="card-avatar-placeholder">${(s.title || '?')[0]}</div>`;
-      
-      const badgeHtml = isFav ? `<div style="position:absolute;top:10px;right:10px;font-size:1.2rem;z-index:2;filter:drop-shadow(0 2px 4px rgba(0,0,0,0.8));">❤️</div>` : '';
-      
-      let progressHtml = '';
-      if (isIndexing) {
-          const pc = Math.min(99, Math.round(((istate.processed || 0) / (istate.total || 100)) * 100));
-          progressHtml = `
-            <div class="card-status-text">Indexing ${pc}%</div>
-            <div class="card-progress-container"><div class="card-progress-bar" style="width:${pc}%"></div></div>
-          `;
+      // Surgical update
+      const favBadge     = card.querySelector('.card-fav-badge');
+      const avatarImg    = card.querySelector('.card-avatar');
+      const avatarPh     = card.querySelector('.card-avatar-placeholder');
+      const titleEl      = card.querySelector('h3');
+      const statusText   = card.querySelector('.card-status-text');
+      const progressCont = card.querySelector('.card-progress-container');
+      const progressBar  = card.querySelector('.card-progress-bar');
+
+      if (favBadge) favBadge.style.display = isFav ? 'block' : 'none';
+
+      if (s.source_photo) {
+        if (avatarImg && avatarImg.src !== s.source_photo) avatarImg.src = s.source_photo;
+        if (avatarImg) avatarImg.style.display = '';
+        if (avatarPh)  avatarPh.style.display  = 'none';
+      } else {
+        if (avatarImg) avatarImg.style.display  = 'none';
+        const initial = (s.title || '?')[0];
+        if (avatarPh) {
+          avatarPh.style.display = '';
+          if (avatarPh.textContent !== initial) avatarPh.textContent = initial;
+        }
       }
 
-      card.innerHTML = `
-        <div class="card-overlay"></div>
-        ${badgeHtml}
-        <div class="card-body">${avatarHtml}<h3>${s.title}</h3></div>
-        ${progressHtml}`;
-      card.onclick = () => {
-        // Reset season/episode memory when switching to a NEW series
-        if (lastFocusedSeriesId !== s.id) {
-            lastFocusedSeasonId = null;
-            lastFocusedEpisodeId = null;
-        }
-        lastFocusedSeriesId = s.id;
-        loadSeasons(s);
-      };
+      if (titleEl && titleEl.textContent !== s.title) titleEl.textContent = s.title;
+
+      if (isIndexing && statusText && progressCont && progressBar) {
+        let pc = Math.round(((istate.processed || 0) / (istate.total || 100)) * 100);
+        pc = Math.max(0, Math.min(100, pc));
+        const labelText = pc === 100 ? 'Finishing...' : `Indexing ${pc}%`;
+        const barWidth  = pc + '%';
+        if (statusText.textContent !== labelText) statusText.textContent = labelText;
+        if (progressBar.style.width !== barWidth)  progressBar.style.width  = barWidth;
+        statusText.style.display   = '';
+        progressCont.style.display = '';
+      } else if (statusText && progressCont) {
+        statusText.style.display   = 'none';
+        progressCont.style.display = 'none';
+      }
     });
 
     // 2. Show indexing sources that haven't created canonical series yet
     sources.forEach(src => {
         const istate = indexerStates.get(src.id);
         if (istate && (istate.status === 'indexing' || istate.status === 'queued')) {
-            // Check if this source already has a canonical series in the list.
-            // Since canonical series titles may derive from the source name, we
-            // check if any listed series was linked from this specific source.
-            // Simple guard: if no series card uses this source's ID as primarySourceId,
-            // and the series count is 0, show a placeholder.
-            const hasLinkedSeries = seriesList.length > 0; // simplification: hide placeholder once any series exists
-            if (!hasLinkedSeries) {
-                let card = existingCards.get('src_' + src.id);
+            // Only show placeholder if no series exists AT ALL yet (bootstrap phase)
+            // or if the cleanup logic will handle hiding it later.
+            if (seriesList.length === 0) {
+                const cardId = 'src_' + src.id;
+                renderedIds.add(cardId);
+                let card = existingCards.get(cardId);
                 if (!card) {
                     card = document.createElement('div');
                     card.className = 'card series-card focusable indexing-placeholder';
                     card.tabIndex = 0;
                     card.dataset.sourceId = src.id;
-                    card.dataset.seriesId = 'src_' + src.id;
+                    card.dataset.seriesId = cardId;
+
+                    const overlay = document.createElement('div');
+                    overlay.className = 'card-overlay';
+                    overlay.style.background = 'rgba(15, 23, 42, 0.8)';
+                    card.appendChild(overlay);
+
+                    const body = document.createElement('div');
+                    body.className = 'card-body';
+                    const ph = document.createElement('div');
+                    ph.className = 'card-avatar-placeholder';
+                    ph.style.cssText = 'background:var(--accent);color:white;';
+                    ph.textContent = '🔄';
+                    body.appendChild(ph);
+                    const h3 = document.createElement('h3');
+                    h3.textContent = 'Syncing: ' + src.name;
+                    body.appendChild(h3);
+                    card.appendChild(body);
+
+                    const statusText = document.createElement('div');
+                    statusText.className = 'card-status-text';
+                    card.appendChild(statusText);
+
+                    const progressContainer = document.createElement('div');
+                    progressContainer.className = 'card-progress-container';
+                    const progressBar = document.createElement('div');
+                    progressBar.className = 'card-progress-bar';
+                    progressContainer.appendChild(progressBar);
+                    card.appendChild(progressContainer);
+
                     row.appendChild(card);
                 }
-                const pc = Math.min(99, Math.round(((istate.processed || 0) / (istate.total || 100)) * 100));
-                card.innerHTML = `
-                    <div class="card-overlay" style="background: rgba(15, 23, 42, 0.8);"></div>
-                    <div class="card-body">
-                        <div class="card-avatar-placeholder" style="background:var(--accent); color:white;">🔄</div>
-                        <h3>Syncing: ${src.name}</h3>
-                    </div>
-                    <div class="card-status-text">Starting... ${pc}%</div>
-                    <div class="card-progress-container"><div class="card-progress-bar" style="width:${pc}%"></div></div>
-                `;
+                // Surgical update for placeholder
+                let pc = Math.round(((istate.processed || 0) / (istate.total || 100)) * 100);
+                pc = Math.max(0, Math.min(100, pc));
+                const barEl  = card.querySelector('.card-progress-bar');
+                const textEl = card.querySelector('.card-status-text');
+                const barW   = pc + '%';
+                const label  = pc === 100 ? 'Starting... (Finishing)' : `Starting... ${pc}%`;
+                if (barEl  && barEl.style.width !== barW)   barEl.style.width   = barW;
+                if (textEl && textEl.textContent !== label)  textEl.textContent  = label;
             }
         }
     });
+
+    // 3. Cleanup stale cards (Remove cards that were not rendered in this loop)
+    // This includes removing placeholders if real content was added.
+    if (isRefreshing || seriesList.length > 0) {
+        [...row.children].forEach(child => {
+            const id = child.dataset.seriesId || (child.dataset.sourceId ? 'src_' + child.dataset.sourceId : null) || child.dataset.placeholderId;
+            if (!renderedIds.has(id)) {
+                // If we have real series, or this is a refresh, remove placeholders and stale cards
+                child.remove();
+            }
+        });
+    }
 
     if (!skipFocus && !isRefreshing) {
         requestAnimationFrame(() => {
@@ -1309,6 +1418,7 @@ async function toggleFav(type, id, currentState) {
   } else if (currentView === 'favorites') {
     loadFavorites();
   }
+  pushSyncDelayed('favorites');
 }
 
 // ── Sources ────────────────────────────────────────────────────────────────
@@ -1571,7 +1681,7 @@ async function submitWizardSource() {
     lastFocusedSourceId = id; // Focus new source in loadSources
     const source = await window.DB.getSourceById(id);
     window.AppIndexer.indexSource(source);
-    await window.TGClient.syncSourcesToTelegram(userId);
+    pushSyncDelayed('sources');
     
     await loadSources();
     startIndexPoll(true);
@@ -1586,6 +1696,7 @@ async function submitWizardSource() {
     btn.disabled = false;
     btn.textContent = oldText;
     wizardStepHistory = [];
+    pushSyncDelayed('sources');
   }
 }
 
@@ -1657,7 +1768,7 @@ function openSourceOptions(source) {
 
   refreshBtn.onclick = () => { closeModal('source-options-modal'); refreshSource(source.id); };
   renameBtn.onclick  = () => { openModal('add-source-modal'); promptRenameWizard(source); };
-  deleteBtn.onclick  = () => { closeModal('source-options-modal'); deleteSource(source.id); };
+  deleteBtn.onclick  = () => { closeModal('source-options-modal'); confirmAndDeleteSource(source.id); };
   cancelBtn.onclick  = () => { closeModal('source-options-modal'); };
 
   openModal('source-options-modal');
@@ -1694,7 +1805,7 @@ async function refreshSource(id) {
   if (source) { window.AppIndexer.indexSource(source, true); startIndexPoll(true); }
 }
 
-async function deleteSource(id) {
+async function confirmAndDeleteSource(id) {
   const ok = await showConfirm('Delete this source and all its indexed content?', 'Delete Source', true);
   if (!ok) return;
 
@@ -1706,7 +1817,7 @@ async function deleteSource(id) {
   else if (sources.length > 1) neighborId = sources[idx + 1].id;
 
   await window.DB.deleteSource(id);
-  await window.TGClient.syncSourcesToTelegram(userId);
+  pushSyncDelayed('sources');
   
   lastFocusedSourceId = neighborId;
   await loadSources();
@@ -1718,6 +1829,7 @@ async function deleteSource(id) {
   }
   
   showToast('Source deleted', 'success');
+  pushSyncDelayed('sources');
 }
 
 // ── Indexer progress → badge updates ──────────────────────────────────────
@@ -1752,13 +1864,17 @@ window.AppIndexer.onProgress = (sourceId, state) => {
 
     // SURGICAL UPDATE: Find the card for this source and update only its progress bar
     if (state.status === 'indexing' || state.status === 'queued') {
-        const pc = Math.min(99, Math.round(((state.processed || 0) / (state.total || 100)) * 100));
+        let pc = Math.round(((state.processed || 0) / (state.total || 100)) * 100);
+        pc = Math.max(0, Math.min(100, pc));
         const cards = document.querySelectorAll(`[data-source-id="${sourceId}"]`);
         cards.forEach(card => {
             const bar = card.querySelector('.card-progress-bar');
             const text = card.querySelector('.card-status-text');
             if (bar) bar.style.width = pc + '%';
-            if (text) text.textContent = (card.classList.contains('indexing-placeholder') ? 'Syncing... ' : 'Indexing ') + pc + '%';
+            if (text) {
+                const prefix = card.classList.contains('indexing-placeholder') ? 'Syncing... ' : 'Indexing ';
+                text.textContent = pc === 100 ? (prefix + 'Finishing...') : (prefix + pc + '%');
+            }
         });
     }
 
@@ -1767,9 +1883,10 @@ window.AppIndexer.onProgress = (sourceId, state) => {
     const now = Date.now();
     if (!window.lastCatalogRefresh) window.lastCatalogRefresh = 0;
 
-    if (state.status === 'done' || (now - window.lastCatalogRefresh > 2000)) {
+    // Increased debounce to 5000ms to allow smooth D-pad nav on low-end hardware
+    if (state.status === 'done' || (now - window.lastCatalogRefresh > 5000)) {
         if (currentView === 'catalog' && catalogView === 'series') {
-            loadCatalogSeries(true);
+            requestAnimationFrame(() => loadCatalogSeries(true));
             window.lastCatalogRefresh = now;
         }
     }
@@ -1996,6 +2113,45 @@ async function handleLogout() {
   } catch(e) {
     showToast('Logout failed: ' + e.message, 'error');
     document.getElementById('initial-loader').style.display = 'none';
+  }
+}
+
+async function handleClearCache() {
+  const ok = await showConfirm(
+    'This will wipe all locally cached data (Sources, View History, Favorites). Your Telegram account will stay connected.',
+    'Clear Local Cache',
+    true // isDanger
+  );
+  if (!ok) return;
+
+  try {
+    document.getElementById('initial-loader').style.display = 'flex';
+    const loaderText = document.getElementById('loader-text');
+    if (loaderText) loaderText.textContent = 'Clearing Cache...';
+    
+    // Wipe local DB
+    await window.DB.clearAllData();
+    
+    // Force reload to re-index and re-sync from Telegram (Truth)
+    window.location.reload();
+  } catch (e) {
+    console.error('Clear cache failed:', e);
+    showToast('Failed to clear cache: ' + e.message, 'error');
+    document.getElementById('initial-loader').style.display = 'none';
+  }
+}
+
+async function handleForceSync() {
+  showToast('Initializing Cloud Sync...', 'info');
+  try {
+    const loaderText = document.getElementById('loader-text');
+    await syncFromTelegram();
+    const sources = await window.DB.getSources(userId);
+    for (const src of sources) window.AppIndexer.indexSource(src);
+    showTab('catalog');
+    showToast('✅ Cloud sync complete!', 'success');
+  } catch (e) {
+    showToast('Sync failed: ' + e.message, 'error');
   }
 }
 
@@ -2241,6 +2397,8 @@ async function syncProgressNow(forceWatched = false, nativeTimeMs, nativeDurMs) 
     const saveDur = durationKnown ? Math.floor(dur) : (storedDur > 0 ? Math.floor(storedDur) : 0);
     
     await window.DB.updateProgress(userId, currentPlayingEp.id, Math.floor(t), saveDur, isWatched ? 1 : 0);
+    // Push progress to cloud with longer debounce during playback
+    pushSyncDelayed('progress');
   } else if (t > 5) {
      // Duration not known (maybe loading still), but we have some progress. 
      // Save JUST the progress without marking as watched.
@@ -2361,17 +2519,69 @@ async function playNextEpisode() {
 // ── Share from Phone ───────────────────────────────────────────────────────
 // ── Sync on startup ────────────────────────────────────────────────────────
 
+// ── Sync (Sources, Favs, Progress) ──────────────────────────────────────────
+
+const syncPushTimers = { sources: null, progress: null, favorites: null };
+
+/**
+ * pushSyncDelayed(category)
+ * Throttles pushes to Telegram to avoid rate limits and UI lag.
+ */
+function pushSyncDelayed(category) {
+  if (syncPushTimers[category]) clearTimeout(syncPushTimers[category]);
+  
+  syncPushTimers[category] = setTimeout(async () => {
+    console.log(`[Sync] Pushing ${category}...`);
+    try {
+        let payload;
+        let tag;
+        if (category === 'sources') {
+            payload = await window.DB.getSourcesSyncPayload(userId);
+            tag = '#StreamAppSources';
+        } else if (category === 'favorites') {
+            payload = await window.DB.getFavoritesSyncPayload(userId);
+            tag = '#StreamAppFavs';
+        } else if (category === 'progress') {
+            payload = await window.DB.getProgressSyncPayload(userId);
+            tag = '#StreamAppProgress';
+        }
+        if (payload && tag) {
+            await window.TGClient.pushSyncData(tag, payload);
+        }
+    } catch (e) { console.error(`[Sync] Push ${category} failed:`, e); }
+  }, 2000); // 2s debounce
+}
+
 async function syncFromTelegram() {
+  const loaderText = document.getElementById('loader-text');
   try {
-    const sourcesList = await window.TGClient.syncSourcesFromTelegram(userId);
-    if (sourcesList && Array.isArray(sourcesList)) {
-      const inserted = await window.DB.setSourcesForUser(userId, sourcesList);
-      // Kick off indexing for any new sources
-      for (const src of inserted) {
-        if (src.id) window.AppIndexer.indexSource(await window.DB.getSourceById(src.id));
-      }
-    }
-  } catch(e) { console.error('[Startup sync]', e); }
+    // 1. Sources - Critical for startup
+    try {
+        if (loaderText) loaderText.textContent = 'Syncing Sources...';
+        const sourcesList = await window.TGClient.pullSyncData('#StreamAppSources');
+        if (sourcesList && Array.isArray(sourcesList) && sourcesList.length > 0) {
+          const inserted = await window.DB.applySourcesSync(userId, sourcesList);
+          for (const src of inserted) {
+            if (src.id) window.AppIndexer.indexSource(await window.DB.getSourceById(src.id));
+          }
+        }
+    } catch(e) { console.error('[Sync] Sources failed:', e); }
+
+    // 2. Favorites - Non-critical
+    try {
+        if (loaderText) loaderText.textContent = 'Syncing Favorites...';
+        const favsList = await window.TGClient.pullSyncData('#StreamAppFavs');
+        if (favsList) await window.DB.applyFavoritesSync(userId, favsList);
+    } catch(e) { console.error('[Sync] Favorites failed:', e); }
+
+    // 3. Progress - Non-critical
+    try {
+        if (loaderText) loaderText.textContent = 'Syncing Progress...';
+        const progList = await window.TGClient.pullSyncData('#StreamAppProgress');
+        if (progList) await window.DB.applyProgressSync(userId, progList);
+    } catch(e) { console.error('[Sync] Progress failed:', e); }
+
+  } catch(e) { console.error('[Startup sync Global]', e); }
 }
 
 
@@ -2425,12 +2635,14 @@ async function startApp() {
     document.getElementById('initial-loader').style.display = 'none';
     document.getElementById('app').style.display = 'flex';
 
-    userId = window.TGClient.currentUserId;
+    // Ensure userId is normalized to String early on
+    userId = window.TGClient.currentUserId ? String(window.TGClient.currentUserId) : null;
+    
     // Pre-fetch dialogs for channel access hashes
     window.TGClient.getDialogs({}).catch(() => {});
     // Load settings
     await loadSettings();
-    // Sync sources from Telegram
+    // Sync sources from Telegram (Truth)
     await syncFromTelegram();
     // Start indexing any existing sources
     const sources = await window.DB.getSources(userId);
