@@ -147,8 +147,14 @@ const SpatialNav = (() => {
 
       if (key === 'ArrowLeft' || key === 'ArrowRight') {
         // STAY in current zone segment during horizontal search
-        // (i.e., content moves to content, sidebar moves to sidebar)
         if (elZone !== currentZone) continue;
+
+        // --- Integrated Card-to-Card Lock ---
+        const isActiveCard = active.classList.contains('card');
+        const isTargetCard = el.classList.contains('card');
+        if (isActiveCard && !isTargetCard) continue;
+        // ------------------------------------
+
         if (Math.abs(dy) > Math.max(currentRect.height * 0.7, 50)) continue;
         if (key === 'ArrowRight' && dx <= 0) continue;
         if (key === 'ArrowLeft'  && dx >= 0) continue;

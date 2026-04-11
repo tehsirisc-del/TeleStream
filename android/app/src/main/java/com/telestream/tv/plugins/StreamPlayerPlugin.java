@@ -657,6 +657,7 @@ public class StreamPlayerPlugin extends Plugin {
                         totalRead += read;
                     }
                     String payload = bodyBuilder.toString();
+                    Log.d(TAG, "[ShareServer] Received metadata request payload: " + payload);
                     
                     if (payload.contains("\"token\":\"" + token + "\"")) {
                         String link = extractJsonValue(payload, "link");
@@ -669,9 +670,8 @@ public class StreamPlayerPlugin extends Plugin {
                         JSObject eventData = new JSObject();
                         eventData.put("requestId", requestId);
                         eventData.put("link", link);
-                        if (StreamPlayerPlugin.this.bridge != null) {
-                            StreamPlayerPlugin.this.bridge.triggerWindowJSEvent("need_metadata", eventData.toString());
-                        }
+                        Log.d(TAG, "Notifying need_metadata for: " + link);
+                        notifyListeners("need_metadata", eventData);
                         
                         try {
                             // Wait for JS response (Max 10s)
@@ -695,6 +695,7 @@ public class StreamPlayerPlugin extends Plugin {
                         totalRead += readCount;
                     }
                     String payload = bodyBuilder.toString();
+                    Log.d(TAG, "[ShareServer] Received submit payload: " + payload);
                     
                     if (payload.contains("\"token\":\"" + token + "\"")) {
                         String link = extractJsonValue(payload, "link");
@@ -706,9 +707,8 @@ public class StreamPlayerPlugin extends Plugin {
                             data.put("link", link);
                             data.put("name", name);
                             data.put("type", type);
-                            if (StreamPlayerPlugin.this.bridge != null) {
-                                StreamPlayerPlugin.this.bridge.triggerWindowJSEvent("link_shared", data.toString());
-                            }
+                            Log.d(TAG, "Notifying link_shared for: " + link);
+                            notifyListeners("link_shared", data);
                             sendResponse(out, 200, "application/json", "{\"success\":true}");
                         } else {
                             sendResponse(out, 400, "application/json", "{\"error\":\"Missing link\"}");

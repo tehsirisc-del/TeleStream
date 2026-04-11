@@ -551,6 +551,7 @@ function cleanupFavBar() {
 function showTab(view) {
   if (currentView === view) return;
   cleanupFavBar();
+  cleanupAutoSortBar();
   currentView = view;
   ['catalog','favorites','sources','settings'].forEach(v => {
     const el = document.getElementById(`view-${v}`);
@@ -895,7 +896,8 @@ async function loadSeasons(series) {
     
     row.innerHTML = '';
     
-    // Clean up any previously added fav button from previous view
+    // Clean up any previously added fav button or auto-sort bars from previous view
+    cleanupAutoSortBar();
     if (row.previousElementSibling && row.previousElementSibling.classList.contains('fav-bar-container')) {
       row.previousElementSibling.remove();
     }
@@ -931,13 +933,17 @@ async function loadSeasons(series) {
     }
 
     requestAnimationFrame(() => {
+        let target = null;
         if (lastFocusedSeasonId) {
-            const target = row.querySelector(`[data-season-id="${lastFocusedSeasonId}"]`);
-            if (target) { target.focus(); return; }
+            target = row.querySelector(`[data-season-id="${lastFocusedSeasonId}"]`);
         }
-        // Always prefer the first season card over the Favorites button
-        if (row.firstElementChild) row.firstElementChild.focus();
-        else if (favBar) favBar.firstElementChild.focus();
+        if (!target) target = row.firstElementChild;
+        if (!target && favBar) target = favBar.firstElementChild;
+        
+        if (target) {
+            target.focus();
+            target.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
+        }
     });
   } catch(e) { console.error(e); }
 }
@@ -970,8 +976,7 @@ async function loadEpisodes(season) {
     row.innerHTML = '';
 
     // Remove any existing
-    const existing = row.parentElement.querySelector('.auto-sort-bar');
-    if (existing) existing.remove();
+    cleanupAutoSortBar();
 
     // Auto-sort bar for season 0
     if (season.seasonNumber === 0) {
@@ -1032,28 +1037,61 @@ async function loadEpisodes(season) {
     const catalogRow = document.getElementById('catalog-row');
     
     setTimeout(() => {
-        const idToFocus = lastFocusedEpisodeId;
-        
-        if (idToFocus) {
-            const target = document.querySelector(`[data-episode-id="${idToFocus}"]`);
-            if (target) { 
-                target.focus(); 
-                return; 
-            }
+        let target = null;
+        if (lastFocusedEpisodeId) {
+            target = document.querySelector(`[data-episode-id="${lastFocusedEpisodeId}"]`);
         }
         
-        // Fallback: specifically look for an episode card first
-        const firstEp = row.querySelector('.episode-card');
-        if (firstEp) {
-            firstEp.focus();
-        } else {
-            const anyFirstInRow = row.querySelector('.focusable');
-            if (anyFirstInRow) anyFirstInRow.focus();
+        if (!target) target = row.querySelector('.episode-card');
+        if (!target) target = row.querySelector('.focusable');
+        
+        if (target) {
+            target.focus();
+            target.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
         }
     }, 100); 
 
   } catch(e) { console.error(e); }
 }
+
+function cleanupAutoSortBar() {
+    const existing = document.querySelector('.auto-sort-bar');
+    if (existing) existing.remove();
+}
+
+/**
+ * Robust horizontal navigation for row containers.
+ * Prevents focus leaking to vertical sidebar/tabs when moving left/right.
+ */
+function handleRowNavigation(event) {
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+    
+    const active = document.activeElement;
+    if (!active || !active.classList.contains('card')) return;
+    
+    const row = active.closest('.row-container');
+    if (!row) return;
+    
+    const cards = Array.from(row.querySelectorAll('.card.focusable'));
+    const index = cards.indexOf(active);
+
+    if (event.key === 'ArrowLeft' && index === 0) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        // Nudge boundary feedback
+        active.style.transform = 'scale(1.05) translateX(-15px)';
+        setTimeout(() => active.style.transform = '', 150);
+    } else if (event.key === 'ArrowRight' && index === cards.length - 1) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        // Nudge boundary feedback
+        active.style.transform = 'scale(1.05) translateX(15px)';
+        setTimeout(() => active.style.transform = '', 150);
+    }
+}
+
+// Global row navigation handler
+document.addEventListener('keydown', handleRowNavigation, true);
 
 // ── Favorites ──────────────────────────────────────────────────────────────
 
@@ -1216,14 +1254,26 @@ async function startWizardQrSession() {
       try { if (typeof raw === 'string') data = JSON.parse(raw); } catch(e) {}
       
       console.log('[Wizard] Shared data received:', data);
-      document.getElementById('wizard-link-input').value = data.link || '';
+      
+      // Clean the link for the UI
+      let displayLink = data.link || '';
+      if (displayLink.includes('t.me/')) {
+          displayLink = displayLink.split('t.me/')[1];
+      } else if (displayLink.includes('telegram.me/')) {
+          displayLink = displayLink.split('telegram.me/')[1];
+      }
+      
+      const input = document.getElementById('wizard-link-input');
+      if (input) input.value = displayLink;
 
       if (data.name && data.type) {
         // Enriched package
         wizardPendingData = {
-          link: data.link,
+          link: normalizeTelegramLink(data.link),
           name: data.name,
-          type: data.type
+          photo: data.photo,
+          type: data.type,
+          isSingle: true // Default for auto-added channels
         };
         stopWizardQrSession();
         await validateStepLink(true); // Auto-mode
@@ -1231,27 +1281,29 @@ async function startWizardQrSession() {
         // Fallback for simple link
         stopWizardQrSession();
         goToAddStep('link'); 
-        await validateStepLink();
+        // Focus the input
+        if (input) input.focus();
       }
     });
 
     // Handle metadata requests from phone
-    window.metadataRequestListener = await StreamPlayer.addListener('need_metadata', async (raw) => {
-      let req = raw;
-      try { if (typeof raw === 'string') req = JSON.parse(raw); } catch(e) {}
-      console.log('[Wizard] Metadata requested for:', req.link);
+    window.metadataRequestListener = await StreamPlayer.addListener('need_metadata', async (req) => {
+      console.log('[Wizard] need_metadata event triggered for link:', req.link);
       
       try {
         const { channelArg } = await window.TGClient.resolveChannelFromLink(req.link);
+        console.log('[Wizard] Resolved channelArg:', channelArg);
         const entity = await window.TGClient.getEntity(channelArg);
         const title = entity.title || entity.username || 'Telegram Channel';
         const photo = await window.TGClient.downloadProfilePhoto(entity);
         
+        console.log('[Wizard] Resolving metadata success, sending back to phone:', title);
         await StreamPlayer.sendMetadataResponse({
           requestId: req.requestId,
           data: { success: true, title, photo }
         });
       } catch(e) {
+        console.error('[Wizard] Metadata resolution error:', e);
         await StreamPlayer.sendMetadataResponse({
           requestId: req.requestId,
           data: { success: false, error: e.message }
@@ -1271,16 +1323,34 @@ function stopWizardQrSession() {
 }
 
 
+function normalizeTelegramLink(raw) {
+    if (!raw) return '';
+    let clean = raw.trim();
+    
+    // Remove protocol
+    clean = clean.replace(/^https?:\/\//, '');
+    
+    // Remove known domains
+    clean = clean.replace(/^(t\.me|telegram\.me|telegram\.dog)\//, '');
+    
+    // Remove leading @ or /
+    clean = clean.replace(/^[@\/]+/, '');
+    
+    // Final check for double prefixing (safety)
+    if (clean.startsWith('t.me/')) {
+        clean = clean.replace('t.me/', '');
+    }
+    
+    return 'https://t.me/' + clean;
+}
+
 async function validateStepLink(isAuto = false) {
   const input = document.getElementById('wizard-link-input');
-  let raw = input.value.trim();
-  if (!raw) { showToast('Link is required', 'error'); return; }
+  let raw = input ? input.value.trim() : '';
+  if (!raw && !isAuto) { showToast('Link is required', 'error'); return; }
   
-  let link = raw;
-  if (!raw.startsWith('http')) {
-    if (raw.startsWith('/')) raw = raw.substring(1);
-    link = 'https://t.me/' + raw;
-  }
+  let link = normalizeTelegramLink(raw);
+  console.log('[Wizard] Validating normalized link:', link);
   
   if (!isAuto) wizardPendingData.link = link;
   goToAddStep('loading');
@@ -1351,6 +1421,11 @@ document.getElementById('btn-wizard-multi').onclick = () => {
     submitWizardSource();
 };
 
+async function finalizeWizardAdd() {
+    console.log('[Wizard] Auto-finalizing add');
+    await submitWizardSource();
+}
+
 async function submitWizardSource() {
   closeModal('add-source-modal');
   const btn = document.getElementById('add-source-btn');
@@ -1360,6 +1435,7 @@ async function submitWizardSource() {
   
   try {
     const id = await window.DB.addSource(wizardPendingData.name, wizardPendingData.link, wizardPendingData.isSingle, userId);
+    lastFocusedSourceId = id; // Focus new source in loadSources
     const source = await window.DB.getSourceById(id);
     window.AppIndexer.indexSource(source);
     await window.TGClient.syncSourcesToTelegram(userId);
