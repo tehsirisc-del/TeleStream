@@ -14,7 +14,7 @@ public class LocalFeedServer extends Thread {
 
     private static final String TAG = "LocalFeedServer";
     private static final int PORT = 9992;
-    private static final int CHUNK_SIZE = 128 * 1024;
+    private static final int CHUNK_SIZE = 512 * 1024;
 
     private ServerSocket serverSocket;
     private boolean running = true;
@@ -40,6 +40,7 @@ public class LocalFeedServer extends Thread {
         try {
             // כמו קוד א׳ – רק localhost
             serverSocket = new ServerSocket(PORT, 50, InetAddress.getByName("127.0.0.1"));
+            serverSocket.setReceiveBufferSize(1024 * 1024);
             Log.d(TAG, "LocalFeedServer started on 127.0.0.1:" + PORT);
 
             while (running) {
@@ -56,6 +57,8 @@ public class LocalFeedServer extends Thread {
 
     private void handleClient(Socket client) {
         try {
+            client.setTcpNoDelay(true);
+            client.setReceiveBufferSize(1024 * 1024);
             InputStream in = client.getInputStream();
             OutputStream out = client.getOutputStream();
 

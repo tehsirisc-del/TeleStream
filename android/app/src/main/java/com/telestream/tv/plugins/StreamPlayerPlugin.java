@@ -59,6 +59,8 @@ public class StreamPlayerPlugin extends Plugin {
 
     private BridgeDataSource currentBridgeDataSource;
     private LocalFeedServer localFeedServer;
+    private NativeTelegramDataSource currentNativeDataSource;
+    private NativeTelegramDownloadSession currentNativeDownloadSession;
 
     private final ConcurrentHashMap<String, CompletableFuture<JSObject>> pendingMetadataRequests = new ConcurrentHashMap<>();
 
@@ -66,7 +68,9 @@ public class StreamPlayerPlugin extends Plugin {
     public void play(PluginCall call) {
         final long messageId = Long.parseLong(call.getString("messageId", "0"));
         final String channel = call.getString("channel", "");
+        final String peerType = call.getString("peerType", "channel");
         final String title = call.getString("title", "Video");
+        final String messageLink = call.getString("messageLink", null);
         
         // Robust numeric extraction: Capacitor often mis-types these as strings/doubles
         // call.getData() returns a JSObject (JSONObject) which has optLong()
@@ -75,14 +79,15 @@ public class StreamPlayerPlugin extends Plugin {
         final long seekStepMs = call.getData().optLong("seekStep", 15L) * 1000L;
 
         Log.d(TAG, "play() messageId=" + messageId
-                + " channel=" + channel + " title=" + title
-                + " fileSize=" + fileSize + " seekTo=" + seekTo + " seekStep=" + seekStepMs);
+                + " peerType=" + peerType + " channel=" + channel + " title=" + title
+                + " fileSize=" + fileSize + " seekTo=" + seekTo + " seekStep=" + seekStepMs
+                + " messageLink=" + messageLink);
 
         getActivity().runOnUiThread(() -> {
             try {
                 currentSessionId++;
                 releasePlayer(true); // Is transitioning so we skip player_closed event
-                setupPlayerAndDialog(channel, messageId, fileSize, title, seekTo, seekStepMs, currentSessionId);
+                setupPlayerAndDialog(peerType, channel, messageId, messageLink, fileSize, title, seekTo, seekStepMs, currentSessionId);
                 call.resolve();
             } catch (Exception e) {
                 Log.e(TAG, "setupPlayerAndDialog failed", e);
@@ -172,6 +177,20 @@ public class StreamPlayerPlugin extends Plugin {
             currentBridgeDataSource = null;
         }
 
+        if (currentNativeDataSource != null) {
+            try {
+                currentNativeDataSource.close();
+            } catch (Exception ignored) {}
+            currentNativeDataSource = null;
+        }
+
+        if (currentNativeDownloadSession != null) {
+            try {
+                TelegramNativeManager.closeDownloadSessionBlocking(currentNativeDownloadSession);
+            } catch (Exception ignored) {}
+            currentNativeDownloadSession = null;
+        }
+
         if (player != null) {
             finalPos = player.getCurrentPosition();
             finalDur = player.getDuration();
@@ -205,7 +224,7 @@ public class StreamPlayerPlugin extends Plugin {
         }
     }
 
-    private void setupPlayerAndDialog(String channel, long messageId, long fileSize, String title,
+    private void setupPlayerAndDialog(String peerType, String channel, long messageId, String messageLink, long fileSize, String title,
             long seekTo, long seekStepMs, long sessionId) {
         Log.d(TAG, "setupPlayerAndDialog title=" + title);
 
@@ -501,19 +520,48 @@ public class StreamPlayerPlugin extends Plugin {
             return false;
         });
 
-        // ── DataSource (Bridge + LocalFeedServer) ─────────────────────────
-        currentBridgeDataSource = new BridgeDataSource(this, channel, messageId, fileSize);
+        androidx.media3.datasource.DataSource.Factory dataSourceFactory = null;
+        MediaSource mediaSource = null;
+        boolean usingNativePath = false;
 
-        localFeedServer = new LocalFeedServer();
-        localFeedServer.setActiveDataSource(currentBridgeDataSource);
-        localFeedServer.start();
+        if (TelegramNativeManager.isAuthorized()) {
+            try {
+                currentNativeDownloadSession = TelegramNativeManager.openDownloadSessionBlocking(
+                        peerType,
+                        Long.parseLong(channel),
+                        messageId,
+                        messageLink);
+                currentNativeDataSource = new NativeTelegramDataSource(currentNativeDownloadSession);
+                dataSourceFactory = () -> currentNativeDataSource;
+                mediaSource = new ProgressiveMediaSource.Factory(dataSourceFactory)
+                        .createMediaSource(MediaItem.fromUri(currentNativeDataSource.getUri()));
+                updateNativeDebug("StreamPath: NATIVE_TDLIB_RAW");
+                usingNativePath = true;
+            } catch (Exception nativeError) {
+                Log.w(TAG, "Native playback path failed, falling back to JS bridge", nativeError);
+                updateNativeDebug("Native fallback: " + nativeError.getMessage());
+                currentNativeDataSource = null;
+                currentNativeDownloadSession = null;
+            }
+        }
 
-        // 🛑 REMOVED ExoCacheManager to prevent I/O disk bottlenecks on cheap TV eMMC flash drives!
-        // Writing a multi-gigabyte video stream to disk while decoding causes fatal I/O stalls and A/V desync.
-        androidx.media3.datasource.DataSource.Factory dataSourceFactory = () -> currentBridgeDataSource;
+        if (!usingNativePath) {
+            // ── Legacy bridge path retained as fallback ────────────────────
+            currentBridgeDataSource = new BridgeDataSource(this, channel, messageId, fileSize);
 
-        MediaSource mediaSource = new ProgressiveMediaSource.Factory(dataSourceFactory)
-                .createMediaSource(MediaItem.fromUri(currentBridgeDataSource.getUri()));
+            localFeedServer = new LocalFeedServer();
+            localFeedServer.setActiveDataSource(currentBridgeDataSource);
+            localFeedServer.start();
+
+            dataSourceFactory = () -> currentBridgeDataSource;
+            mediaSource = new ProgressiveMediaSource.Factory(dataSourceFactory)
+                    .createMediaSource(MediaItem.fromUri(currentBridgeDataSource.getUri()));
+            updateNativeDebug("StreamPath: JS_BRIDGE_FALLBACK");
+        }
+
+        if (mediaSource == null) {
+            throw new IllegalStateException("Could not create media source");
+        }
 
         // We use setMediaSource with the start position directly.
         // Secondary seek logic is removed as it often causes decoder hangups on hardware decoders.

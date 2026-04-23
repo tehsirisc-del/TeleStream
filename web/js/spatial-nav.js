@@ -44,6 +44,8 @@ const SpatialNav = (() => {
 
   // ── Key Handler ────────────────────────────────────────────────────────────
   function handleKey(e) {
+    if (window._pauseSpatialNav) return; // Let custom modals handle navigation completely
+    
     if (isBlocked()) {
       e.preventDefault();
       return;
@@ -68,7 +70,7 @@ const SpatialNav = (() => {
 
     if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Enter', ' ', 'Select', 'Ok', 'Center', 'dpad_center'].includes(key)) return;
 
-    if (isInput) {
+    if (isInput && !active.readOnly) {
       if (key === 'ArrowLeft' || key === 'ArrowRight') return;
       if (key === 'ArrowUp' || key === 'ArrowDown') return;
     }
@@ -226,4 +228,3 @@ const SpatialNav = (() => {
 
   return { init };
 })();
-

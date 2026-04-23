@@ -104,6 +104,29 @@ function clearSession() {
   localStorage.removeItem(SESSION_KEY);
 }
 
+function decodeBase64UrlToBytes(input) {
+  if (!input) throw new Error('Missing native login token');
+
+  let normalized = input.replace(/-/g, '+').replace(/_/g, '/');
+  const padding = normalized.length % 4;
+  if (padding) {
+    normalized += '='.repeat(4 - padding);
+  }
+
+  const raw = atob(normalized);
+  const gramHelpers = TelegramModule?.helpers;
+  if (gramHelpers?.generateRandomBytes) {
+    const buffer = gramHelpers.generateRandomBytes(raw.length);
+    for (let i = 0; i < raw.length; i += 1) {
+      buffer[i] = raw.charCodeAt(i) & 0xff;
+    }
+    return buffer;
+  }
+
+  // Fallback path for environments where the GramJS Buffer helper is unavailable.
+  return raw;
+}
+
 // ── QR Auth ──────────────────────────────────────────────────────────
 
 function startQrLogin(onQrCode, onSuccess, onError) {
@@ -160,8 +183,16 @@ function startPhoneLogin(phone, onState, onSuccess, onError) {
     },
     onError: (err) => {
       phoneAuthError = err.message;
+      if (phoneAuthError.includes('PHONE_NUMBER_INVALID')) phoneAuthError = 'Invalid phone number format.';
+      else if (phoneAuthError.includes('PHONE_CODE_INVALID')) phoneAuthError = 'The code you entered is invalid.';
+      else if (phoneAuthError.includes('PHONE_CODE_EXPIRED')) phoneAuthError = 'The code has expired. Please resend.';
+      else if (phoneAuthError.includes('FLOOD_WAIT')) {
+          const seconds = phoneAuthError.match(/\d+/) || 'some';
+          phoneAuthError = `Too many attempts. Please wait ${seconds} seconds.`;
+      }
+      
       phoneAuthState = 'error';
-      if (onError) onError(err.message);
+      if (onError) onError(phoneAuthError);
     }
   }).then(async () => {
     isAuthed = true;
@@ -173,7 +204,10 @@ function startPhoneLogin(phone, onState, onSuccess, onError) {
   }).catch(e => {
     phoneAuthState = 'error';
     phoneAuthError = e.message;
-    if (onError) onError(e.message);
+    if (phoneAuthError.includes('PHONE_NUMBER_INVALID')) phoneAuthError = 'Invalid phone number format.';
+    else if (phoneAuthError.includes('PHONE_CODE_INVALID')) phoneAuthError = 'The code you entered is invalid.';
+    
+    if (onError) onError(phoneAuthError);
   });
 }
 
@@ -401,6 +435,221 @@ async function getMessageMeta(channelArg, messageId) {
   return meta;
 }
 
+function decodeLoginTokenBytes(loginLink) {
+  const url = new URL(loginLink);
+  const tokenB64 = url.searchParams.get('token');
+  return decodeBase64UrlToBytes(tokenB64);
+}
+
+async function nativeDebugLog(message, level = 'd') {
+  try {
+    const nativePlugin = window.Capacitor?.Plugins?.TelegramNative;
+    if (!nativePlugin) return;
+    await nativePlugin.debugLog({ level, message });
+  } catch (_) {
+    // Intentionally ignore logging failures.
+  }
+}
+
+function isRetryableNativeTokenError(errorMessage) {
+  return typeof errorMessage === 'string' &&
+    (errorMessage.includes('AUTH_TOKEN_EXPIRED') || errorMessage.includes('AUTH_TOKEN_INVALID'));
+}
+
+async function acceptNativeLoginToken(qrLink, attemptLabel = 'initial') {
+  const { Api } = TelegramModule;
+  await nativeDebugLog(`accept token attempt=${attemptLabel} hasCtor=${!!Api?.auth?.AcceptLoginToken}`);
+  const token = decodeLoginTokenBytes(qrLink);
+  await nativeDebugLog(`token decoded attempt=${attemptLabel} length=${token.length} ctor=${token.constructor?.name}`);
+  const acceptResult = await client.invoke(new Api.auth.AcceptLoginToken({ token }));
+  await nativeDebugLog(`AcceptLoginToken attempt=${attemptLabel} -> ${acceptResult?.className || typeof acceptResult}`);
+  return acceptResult;
+}
+
+async function getNativeAutoconfirmTimeoutMs() {
+  const { Api } = TelegramModule;
+  if (!Api?.help?.GetConfig) {
+    return 60_000;
+  }
+
+  try {
+    const config = await client.invoke(new Api.help.GetConfig());
+    const seconds = Number(config?.authorizationAutoconfirmPeriod || 60);
+    await nativeDebugLog(`authorizationAutoconfirmPeriod=${seconds}s`);
+    return Math.max(seconds, 20) * 1000;
+  } catch (e) {
+    await nativeDebugLog(`GetConfig failed: ${e?.message || e}`, 'w');
+    return 60_000;
+  }
+}
+
+async function confirmNativeAuthorizationIfNeeded(acceptResult) {
+  const { Api } = TelegramModule;
+  const sessionHash = acceptResult?.hash;
+  const isUnconfirmed = !!acceptResult?.unconfirmed;
+
+  await nativeDebugLog(
+    `accept result unconfirmed=${isUnconfirmed} hash=${sessionHash?.toString?.() || sessionHash || 'null'}`,
+  );
+
+  if (!isUnconfirmed || sessionHash == null || !Api?.account?.ChangeAuthorizationSettings) {
+    return { pendingAutoconfirm: false, waitTimeoutMs: 20_000 };
+  }
+
+  try {
+    await client.invoke(
+      new Api.account.ChangeAuthorizationSettings({
+        confirmed: true,
+        hash: sessionHash,
+      }),
+    );
+    await nativeDebugLog('ChangeAuthorizationSettings -> confirmed');
+    return { pendingAutoconfirm: false, waitTimeoutMs: 20_000 };
+  } catch (e) {
+    const errorMessage = e?.message || String(e);
+    if (!errorMessage.includes('FRESH_RESET_AUTHORISATION_FORBIDDEN')) {
+      throw e;
+    }
+
+    const waitTimeoutMs = (await getNativeAutoconfirmTimeoutMs()) + 15_000;
+    await nativeDebugLog(
+      `ChangeAuthorizationSettings deferred by Telegram policy, waiting ${waitTimeoutMs}ms`,
+      'w',
+    );
+    return { pendingAutoconfirm: true, waitTimeoutMs };
+  }
+}
+
+async function waitForNativeReady(nativePlugin, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  let lastState = null;
+
+  while (Date.now() < deadline) {
+    lastState = await nativePlugin.refreshAuthState();
+    await nativeDebugLog(`refreshAuthState(poll) -> ${JSON.stringify(lastState)}`);
+    if (lastState?.state === 'ready' || lastState?.state === 'error') {
+      return lastState;
+    }
+
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) {
+      break;
+    }
+
+    try {
+      lastState = await nativePlugin.waitForReady({ timeoutMs: Math.min(5000, remainingMs) });
+      await nativeDebugLog(`waitForReady(chunk) -> ${JSON.stringify(lastState)}`);
+      if (lastState?.state === 'ready' || lastState?.state === 'error') {
+        return lastState;
+      }
+    } catch (_) {
+      // Poll again until timeout or readiness.
+    }
+  }
+
+  return lastState || nativePlugin.refreshAuthState();
+}
+
+async function completeNativeQrLogin(nativePlugin, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  let lastState = null;
+
+  while (Date.now() < deadline) {
+    const remainingMs = deadline - Date.now();
+    const requestTimeoutMs = Math.min(12000, Math.max(2000, remainingMs));
+
+    try {
+      lastState = await nativePlugin.requestQrBootstrap({
+        timeoutMs: requestTimeoutMs,
+        forceRefresh: true
+      });
+      await nativeDebugLog(`post-accept requestQrBootstrap -> ${JSON.stringify(lastState)}`);
+      if (lastState?.state === 'ready' || lastState?.state === 'error') {
+        return lastState;
+      }
+    } catch (e) {
+      await nativeDebugLog(`post-accept requestQrBootstrap failed: ${e?.message || e}`, 'w');
+    }
+
+    if (Date.now() >= deadline) {
+      break;
+    }
+
+    lastState = await waitForNativeReady(nativePlugin, Math.min(8000, deadline - Date.now()));
+    if (lastState?.state === 'ready' || lastState?.state === 'error') {
+      return lastState;
+    }
+  }
+
+  return lastState || nativePlugin.refreshAuthState();
+}
+
+async function bootstrapNativeSession() {
+  const nativePlugin = window.Capacitor?.Plugins?.TelegramNative;
+  if (!nativePlugin || !client || !isAuthed) {
+    await nativeDebugLog(`bootstrap unavailable plugin=${!!nativePlugin} client=${!!client} authed=${isAuthed}`, 'w');
+    console.warn('[TelegramClient] Native bootstrap unavailable:', {
+      hasPlugin: !!nativePlugin,
+      hasClient: !!client,
+      isAuthed
+    });
+    return false;
+  }
+
+  try {
+    await nativeDebugLog('bootstrap start');
+    const configured = await nativePlugin.configure({ apiId: TG_API_ID, apiHash: TG_API_HASH });
+    await nativeDebugLog(`configure -> ${JSON.stringify(configured)}`);
+    console.log('[TelegramClient] Native configure state:', configured);
+    let state = await nativePlugin.getAuthState();
+    await nativeDebugLog(`getAuthState -> ${JSON.stringify(state)}`);
+    console.log('[TelegramClient] Native initial auth state:', state);
+    if (state?.state === 'ready') return true;
+
+    let qrState = await nativePlugin.requestQrBootstrap({ timeoutMs: 12000 });
+    await nativeDebugLog(`requestQrBootstrap -> ${JSON.stringify(qrState)}`);
+    console.log('[TelegramClient] Native QR bootstrap state:', qrState);
+    if (qrState?.state === 'ready') return true;
+    if (!qrState?.qrLink) {
+      await nativeDebugLog('qr bootstrap returned without qrLink', 'w');
+      return false;
+    }
+
+    let acceptResult;
+    try {
+      acceptResult = await acceptNativeLoginToken(qrState.qrLink, 'initial');
+    } catch (e) {
+      const errorMessage = e?.message || String(e);
+      if (!isRetryableNativeTokenError(errorMessage)) {
+        throw e;
+      }
+
+      await nativeDebugLog(`retrying native token after ${errorMessage}`, 'w');
+      qrState = await nativePlugin.requestQrBootstrap({ timeoutMs: 12000, forceRefresh: true });
+      await nativeDebugLog(`requestQrBootstrap(refresh) -> ${JSON.stringify(qrState)}`);
+      if (!qrState?.qrLink) {
+        throw e;
+      }
+      acceptResult = await acceptNativeLoginToken(qrState.qrLink, 'refresh');
+    }
+
+    console.log('[TelegramClient] AcceptLoginToken result:', acceptResult?.className || acceptResult);
+    const confirmationState = await confirmNativeAuthorizationIfNeeded(acceptResult);
+    await nativeDebugLog(`native confirmation state -> ${JSON.stringify(confirmationState)}`);
+
+    state = await completeNativeQrLogin(nativePlugin, confirmationState.waitTimeoutMs || 20000);
+    await nativeDebugLog(`waitForNativeReady -> ${JSON.stringify(state)}`);
+    console.log('[TelegramClient] Native final auth state:', state);
+    return state?.state === 'ready';
+  } catch (e) {
+    const errorMessage = e?.message || String(e);
+    const errorStack = e?.stack ? ` | stack=${e.stack}` : '';
+    await nativeDebugLog(`bootstrap failed: ${errorMessage}${errorStack}`, 'e');
+    console.warn('[TelegramClient] Native bootstrap skipped:', e?.message || e, e);
+    return false;
+  }
+}
+
 async function logout() {
   if (client) {
     try {
@@ -409,9 +658,144 @@ async function logout() {
       console.warn('[Logout] Disconnect error:', e);
     }
   }
+  if (window.Capacitor?.Plugins?.TelegramNative) {
+    try {
+      await window.Capacitor.Plugins.TelegramNative.logout();
+    } catch (e) {
+      console.warn('[Logout] Native logout error:', e);
+    }
+  }
   localStorage.removeItem(SESSION_KEY);
   isAuthed = false;
   currentUserId = null;
+}
+
+/**
+ * getChannelsPaged()
+ * Async generator: yields batches of { id, name, username, link } for every
+ * channel/supergroup the user is a member of.
+ * Uses Telegram's built-in pagination to avoid loading all dialogs at once.
+ *
+ * @param {number} batchSize   How many dialogs to fetch per API call (max 100)
+ * @param {function} onBatch   Called with each batch array as it arrives
+ */
+async function* getChannelsPaged(batchSize = 100, onBatch) {
+  const EXCLUDED_NAMES = ['StreamApp Data', 'Telegram', 'Saved Messages'];
+  let offsetDate = 0;
+  let offsetId   = 0;
+  let offsetPeer = new (TelegramModule.Api.InputPeerEmpty)();
+  let totalFetched = 0;
+  const seenIds = new Set();
+
+  while (true) {
+    let dialogs;
+    try {
+      // GetDialogs with manual pagination — avoids in-memory accumulation
+      const result = await client.invoke(
+        new TelegramModule.Api.messages.GetDialogs({
+          offsetDate,
+          offsetId,
+          offsetPeer,
+          limit: batchSize,
+          hash: window.bigInt ? window.bigInt(0) : 0,
+          excludePinned: false,
+          folderId: null,
+        })
+      );
+      dialogs = result;
+    } catch (e) {
+      if (e.message && e.message.includes('FLOOD_WAIT')) {
+        const secs = parseInt(e.message.match(/\d+/)?.[0] || '5', 10);
+        await new Promise(r => setTimeout(r, (secs + 1) * 1000));
+        continue;
+      }
+      console.error('[getChannelsPaged] Error:', e.message);
+      break;
+    }
+
+    if (!dialogs || !dialogs.dialogs || dialogs.dialogs.length === 0) break;
+
+    // Build entity map from the chats/users in the result
+    const entityMap = new Map();
+    for (const c of (dialogs.chats || [])) entityMap.set(c.id.toString(), c);
+    for (const u of (dialogs.users || [])) entityMap.set(u.id.toString(), u);
+
+    const batch = [];
+    let lastDialog = null;
+    for (const dialog of dialogs.dialogs) {
+      const peer = dialog.peer;
+      let entityId = null;
+      if (peer?.channelId) entityId = peer.channelId.toString();
+      else if (peer?.chatId) entityId = peer.chatId.toString();
+      else continue;
+
+      const entity = entityMap.get(entityId);
+      if (!entity) continue;
+
+      // Only channels and megagroups
+      const isChannel = entity.className === 'Channel';
+      const isMegagroup = isChannel && entity.megagroup;
+      const isRealChannel = isChannel && !isMegagroup;
+
+      if (!isChannel) continue; // skip DMs / small groups
+      if (seenIds.has(entityId)) continue;
+      seenIds.add(entityId);
+
+      const name = entity.title || entity.username || `Channel ${entityId}`;
+      if (EXCLUDED_NAMES.includes(name)) continue;
+      if (entity.left || entity.kicked) continue;
+
+      let link;
+      if (entity.username) {
+        link = `https://t.me/${entity.username}`;
+      } else {
+        // Private channel — use internal /c/ format
+        link = `https://t.me/c/${entityId}/1`;
+      }
+
+      batch.push({
+        id:          entityId,
+        name,
+        username:    entity.username || null,
+        link,
+        photo:       null, // loaded lazily in UI
+        isMegagroup,
+        isChannel:   isRealChannel,
+      });
+      lastDialog = dialog;
+    }
+
+    totalFetched += batch.length;
+
+    if (batch.length > 0) {
+      if (onBatch) onBatch(batch);
+      yield batch;
+    }
+
+    // If fewer results than requested, we've reached the end
+    if (dialogs.dialogs.length < batchSize) break;
+
+    // Advance offset for next page using the last dialog
+    if (lastDialog) {
+      offsetDate = lastDialog.date || 0;
+      offsetId   = lastDialog.topMessage || 0;
+      const lastPeer = lastDialog.peer;
+      if (lastPeer?.channelId) {
+        const ent = entityMap.get(lastPeer.channelId.toString());
+        if (ent) {
+          offsetPeer = new TelegramModule.Api.InputPeerChannel({
+            channelId: lastPeer.channelId,
+            accessHash: ent.accessHash || window.bigInt ? window.bigInt(0) : 0,
+          });
+        }
+      } else break;
+    } else break;
+
+    // Small delay to avoid rate limiting
+    await new Promise(r => setTimeout(r, 300));
+  }
+
+  console.log(`[getChannelsPaged] Total fetched: ${totalFetched} channels`);
 }
 
 window.TGClient = {
@@ -421,6 +805,8 @@ window.TGClient = {
   iterMessages, getMessages,
   pushSyncData, pullSyncData,
   downloadProfilePhoto, iterDownload, getMessageMeta,
+  bootstrapNativeSession,
+  getChannelsPaged,
   logout,
   get isAuthed() { return isAuthed; },
   get currentUserId() { return currentUserId; },

@@ -20,12 +20,14 @@ import java.util.Map;
 import android.webkit.JavascriptInterface;
 
 import com.telestream.tv.plugins.StreamPlayerPlugin;
+import com.telestream.tv.plugins.TelegramNativePlugin;
 import com.telestream.tv.plugins.UpdateCheckerPlugin;
 
 public class MainActivity extends BridgeActivity {
     @Override
     public void onCreate(Bundle savedInstanceState) {
         registerPlugin(StreamPlayerPlugin.class);
+        registerPlugin(TelegramNativePlugin.class);
         registerPlugin(UpdateCheckerPlugin.class);
         super.onCreate(savedInstanceState);
 
@@ -91,11 +93,18 @@ public class MainActivity extends BridgeActivity {
         if (getBridge() != null && getBridge().getWebView() != null) {
             WebView webview = getBridge().getWebView();
             webview.setLayerType(android.view.View.LAYER_TYPE_HARDWARE, null);
+            webview.setOverScrollMode(android.view.View.OVER_SCROLL_NEVER);
+            webview.setVerticalScrollBarEnabled(false);
+            webview.setHorizontalScrollBarEnabled(false);
             WebSettings settings = webview.getSettings();
             settings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
             settings.setMediaPlaybackRequiresUserGesture(false);
             settings.setBlockNetworkLoads(false);
             settings.setDomStorageEnabled(true);
+            settings.setDatabaseEnabled(true);
+            settings.setCacheMode(WebSettings.LOAD_DEFAULT);
+            settings.setUseWideViewPort(true);
+            settings.setLoadWithOverviewMode(false);
 
             webview.setWebViewClient(new BridgeWebViewClient(getBridge()) {
             });

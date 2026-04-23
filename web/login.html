@@ -5,15 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>TeleStream — Login</title>
   <link rel="stylesheet" href="css/tv-style.css">
-  <!-- QR Code library -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
-  <!-- GramJS browser bundle -->
   <script src="js/vendor/telegram.browser.js"></script>
-  <!-- App config (injected at build step) -->
   <script src="js/config.js"></script>
-  <!-- Dexie.js -->
   <script src="js/vendor/dexie.min.js"></script>
-  <!-- DB & Telegram client -->
   <script src="js/database.js"></script>
   <script src="js/telegram-client.js"></script>
   <script src="js/spatial-nav.js"></script>
@@ -24,172 +19,296 @@
 <div id="no-internet-overlay">
   <div class="offline-icon">📡</div>
   <h2 class="offline-title">אין חיבור לאינטרנט</h2>
-  <p class="offline-text">
-    נראה שהמכשיר אינו מחובר לרשת. אנא בדוק את הגדרות ה-Wi-Fi או חיבור הכבל בטלוויזיה שלך.
-  </p>
+  <p class="offline-text">נראה שהמכשיר אינו מחובר לרשת. אנא בדוק את הגדרות ה-Wi-Fi או חיבור הכבל בטלוויזיה שלך.</p>
   <button class="btn btn-primary focusable" id="retry-internet-btn" tabindex="0">נסה שוב</button>
 </div>
 
-<div class="login-screen" id="login-screen">
-
-  <!-- QR Container -->
-  <div class="login-box" id="qr-panel">
-    <div class="login-content">
+<div class="login-v2-screen" id="login-screen">
+  <div class="login-v2-split">
+    
+    <!-- Left Branding -->
+    <div class="login-v2-branding">
       <h1>🎬 TeleStream</h1>
-      <p>Scan the QR code with your Telegram mobile app to log in.</p>
+      <p>Connect your Telegram account to sync your favorite shows and movies to your TV.</p>
       
-      <ul class="login-instructions">
+      <ul class="login-instructions-v2" id="qr-instructions">
         <li>Open Telegram on your smartphone</li>
         <li>Go to <b>Settings → Devices</b></li>
         <li>Tap <b>Link Desktop Device</b></li>
         <li>Point your camera at the screen</li>
       </ul>
       
-      <button class="btn btn-secondary focusable" id="show-phone-btn" tabindex="0" style="width:100%;">
-        Login by Phone Number
-      </button>
+      <div id="phone-instructions" class="hidden" style="margin-top:30px;">
+        <p style="color:var(--text-secondary); font-size:1rem;">You will receive a login code via Telegram or SMS.</p>
+      </div>
     </div>
     
-    <div class="qr-section">
-      <div id="qr-container"><div id="qrcode-el"></div></div>
-      <div id="login-status" class="login-status">Connecting...</div>
+    <!-- Right Panel -->
+    <div class="login-v2-panel" id="auth-panel">
+      
+      <div class="auth-loading-overlay" id="loading-overlay">
+        <span class="spin" style="font-size:3rem; margin-bottom:16px;">⏳</span>
+        <div id="login-status" style="font-size:1.1rem; font-weight:600; color:white;">Connecting...</div>
+      </div>
+
+      <!-- Step 1: QR -->
+      <div class="login-v2-step active" id="step-qr">
+        <h2>Scan QR Code</h2>
+        <p class="step-desc">Quickest way to sign in</p>
+        
+        <div class="qr-large-container" id="qr-container">
+          <div id="qrcode-el"></div>
+        </div>
+        
+        <button class="btn btn-secondary focusable style-full-width" id="btn-show-phone" tabindex="0" style="width:100%;">
+          Login by Phone Number
+        </button>
+      </div>
+      
+      <!-- Step 2: Phone Input -->
+      <div class="login-v2-step" id="step-phone">
+        <h2>Enter Phone Number</h2>
+        <p class="step-desc">To send you a login code</p>
+        
+        <div class="phone-input-row">
+          <button class="country-btn focusable" id="btn-country" tabindex="0">
+            <span id="country-flag">🌍</span>
+            <span id="country-code">+1</span>
+          </button>
+          <input type="text" id="phone-input" class="styled-input phone-number-input focusable" placeholder="Phone without country code" tabindex="0" inputmode="numeric" pattern="[0-9]*" maxlength="15" readonly>
+        </div>
+        
+        <button class="btn btn-primary focusable" id="btn-send-code" tabindex="0" style="width:100%; margin-bottom:12px;">Send Code</button>
+        <button class="btn btn-secondary focusable" id="btn-back-to-qr" tabindex="0" style="width:100%;">Back to QR Setup</button>
+      </div>
+      
+      <!-- Step 3: OTP -->
+      <div class="login-v2-step" id="step-otp">
+        <h2>Verification Code</h2>
+        <p class="step-desc" id="otp-desc">We sent a code to your Telegram app.</p>
+        
+        <div class="otp-row focusable" id="otp-boxes" tabindex="0" role="group" aria-label="Verification code">
+          <div class="otp-box" data-idx="0"></div>
+          <div class="otp-box" data-idx="1"></div>
+          <div class="otp-box" data-idx="2"></div>
+          <div class="otp-box" data-idx="3"></div>
+          <div class="otp-box" data-idx="4"></div>
+        </div>
+        <input type="text" id="otp-input" class="otp-hidden-input" inputmode="numeric" pattern="[0-9]*" maxlength="5" tabindex="-1" aria-hidden="true" autocomplete="one-time-code">
+        
+        <div class="resend-row">
+          <span id="resend-text">Wait <span id="resend-timer">60</span>s to resend</span>
+          <button class="resend-btn focusable hidden" id="btn-resend" tabindex="0">Resend Code</button>
+        </div>
+        
+        <button class="btn btn-secondary focusable" id="btn-change-number" tabindex="0" style="width:100%;">Change Number</button>
+      </div>
+      
+      <!-- Step 4: Password 2FA -->
+      <div class="login-v2-step" id="step-password">
+        <h2>2-Step Verification</h2>
+        <p class="step-desc">Enter your Telegram 2FA password</p>
+        
+        <input type="password" id="pass-input" class="styled-input focusable" placeholder="Password" tabindex="0" style="margin-bottom:24px;">
+        
+        <button class="btn btn-primary focusable" id="btn-submit-pass" tabindex="0" style="width:100%;">Submit</button>
+      </div>
+      
     </div>
   </div>
+</div>
 
-  <!-- Phone Container -->
-  <div class="login-box phone-mode hidden" id="phone-panel">
-    <div class="login-content">
-      <h1>📱 Phone Login</h1>
-      <p id="phone-desc">Enter your phone number in international format (+972...)</p>
-      <div id="phone-status" class="login-status"></div>
+<!-- Country Picker Modal -->
+<div id="country-modal" class="modal-overlay country-modal">
+  <div class="modal-box">
+    <div class="country-modal-header">
+      <h2 style="color:white; margin-bottom:8px;">Select Country</h2>
+      <input type="text" id="country-search" class="country-search focusable" tabindex="0" placeholder="Search... (e.g. Israel)">
     </div>
-    <div class="phone-section" style="width: 320px; display: flex; flex-direction: column; gap: 12px; flex-shrink: 0;">
-      <input type="tel" id="phone-input" class="styled-input" placeholder="+1234567890" tabindex="0" readonly>
-      <input type="number" id="code-input" class="styled-input hidden" placeholder="5-digit code" tabindex="0" inputmode="numeric" pattern="[0-9]*" oninput="if(this.value.length > 5) this.value = this.value.slice(0, 5);" readonly>
-      <input type="password" id="pass-input" class="styled-input hidden" placeholder="2FA Password" tabindex="0" readonly>
-      <button class="btn btn-primary focusable" id="phone-submit-btn" tabindex="0" style="width: 100%;">Send Code</button>
-      <button class="btn btn-secondary focusable hidden" id="change-number-btn" tabindex="0" style="width: 100%;">Change Number</button>
-      <button class="btn btn-secondary focusable" id="back-to-qr-btn" tabindex="0" style="width: 100%;">Back to QR</button>
-    </div>
+    <div class="country-list" id="country-list"></div>
   </div>
-
 </div>
 
 <script>
+// Minimal set of top countries to bundle without external libs
+const COUNTRIES = [
+  { c: 'US', d: '+1', n: 'United States', f: '🇺🇸' },
+  { c: 'IL', d: '+972', n: 'Israel', f: '🇮🇱' },
+  { c: 'GB', d: '+44', n: 'United Kingdom', f: '🇬🇧' },
+  { c: 'CA', d: '+1', n: 'Canada', f: '🇨🇦' },
+  { c: 'FR', d: '+33', n: 'France', f: '🇫🇷' },
+  { c: 'DE', d: '+49', n: 'Germany', f: '🇩🇪' },
+  { c: 'RU', d: '+7', n: 'Russia', f: '🇷🇺' },
+  { c: 'IN', d: '+91', n: 'India', f: '🇮🇳' },
+  { c: 'BR', d: '+55', n: 'Brazil', f: '🇧🇷' },
+  { c: 'AU', d: '+61', n: 'Australia', f: '🇦🇺' },
+  { c: 'UA', d: '+380', n: 'Ukraine', f: '🇺🇦' },
+  { c: 'ES', d: '+34', n: 'Spain', f: '🇪🇸' },
+  { c: 'IT', d: '+39', n: 'Italy', f: '🇮🇹' },
+  { c: 'MX', d: '+52', n: 'Mexico', f: '🇲🇽' },
+  { c: 'AR', d: '+54', n: 'Argentina', f: '🇦🇷' },
+  { c: 'TR', d: '+90', n: 'Turkey', f: '🇹🇷' },
+  { c: 'PL', d: '+48', n: 'Poland', f: '🇵🇱' },
+  { c: 'NL', d: '+31', n: 'Netherlands', f: '🇳🇱' }
+].sort((a,b) => a.n.localeCompare(b.n));
+
 let qrCode = null;
-let currentPhoneStep = 'phone';
-let authTimer = null;
-let floodTimer = null;
+let currentPhone = '';
+let resendTimer = null;
+let resendSeconds = 60;
+let lastActiveBeforeModal = null;
+let appStarted = false;
+let appStarting = false;
+let listenersBound = false;
+let otpSuppressRefocus = false;
+let otpRowFocused = false;
 
-function clearStatus() {
-  const statusEl = document.getElementById('phone-status') || document.getElementById('login-status');
-  if (statusEl) {
-    statusEl.textContent = '';
-    statusEl.className = 'login-status';
-  }
-  if (floodTimer) {
-     clearInterval(floodTimer);
-     floodTimer = null;
-  }
-  const btn = document.getElementById('phone-submit-btn');
-  if (btn) btn.disabled = false;
+(() => {
+  const isNativeAndroid = !!(window.Capacitor && /Android/i.test(navigator.userAgent || ''));
+  const perfLite = isNativeAndroid && ((navigator.hardwareConcurrency || 4) <= 4);
+  document.body.classList.toggle('perf-lite', perfLite);
+})();
+
+// --- DOM elements ---
+const elStatus = document.getElementById('login-status');
+const elLoading = document.getElementById('loading-overlay');
+const otpBoxes = Array.from(document.querySelectorAll('.otp-box'));
+const otpRow = document.getElementById('otp-boxes');
+const otpInput = document.getElementById('otp-input');
+
+function showStatus(msg, isError=false) {
+  elStatus.textContent = msg;
+  elStatus.style.color = isError ? 'var(--danger)' : 'white';
 }
 
-function startFloodTimer(seconds) {
-  const statusEl = document.getElementById('phone-status') || document.getElementById('login-status');
-  const btn = document.getElementById('phone-submit-btn');
+function setLoading(active, msg='Connecting...') {
+  if(active) {
+    showStatus(msg, false);
+    elLoading.classList.add('active');
+  } else {
+    elLoading.classList.remove('active');
+  }
+}
+
+function showStep(stepId, focusTargetId=null) {
+  document.querySelectorAll('.login-v2-step').forEach(el => el.classList.remove('active'));
+  document.getElementById(stepId).classList.add('active');
   
-  if (floodTimer) clearInterval(floodTimer);
-  
-  let remaining = seconds;
-  btn.disabled = true;
-  statusEl.className = 'login-status error';
-  
-  floodTimer = setInterval(() => {
-    remaining--;
-    if (remaining <= 0) {
-      clearInterval(floodTimer);
-      floodTimer = null;
-      statusEl.textContent = 'Wait time over. You can try again.';
-      statusEl.className = 'login-status success';
-      btn.disabled = false;
-    } else {
-      statusEl.textContent = `Flood Ban: Please wait ${remaining} seconds...`;
+  // Instructions
+  document.getElementById('qr-instructions').classList.toggle('hidden', stepId !== 'step-qr');
+  document.getElementById('phone-instructions').classList.toggle('hidden', stepId === 'step-qr');
+
+  if(focusTargetId) {
+    setTimeout(() => {
+      const el = document.getElementById(focusTargetId);
+      if(el) el.focus();
+    }, 50);
+  }
+}
+
+function focusOtpInput(autoOpen = false, defer = false) {
+  otpRow.classList.add('editing');
+  otpRow.classList.add('focused');
+  otpRowFocused = true;
+  window._pauseSpatialNav = true;
+  const focusTarget = () => {
+    if (document.activeElement === otpInput) {
+      otpInput.blur();
     }
-  }, 1000);
-}
-
-async function startApp() {
-  // Connectivity Monitoring
-  window.addEventListener('online', updateOnlineStatus);
-  window.addEventListener('offline', updateOnlineStatus);
-  document.getElementById('retry-internet-btn').onclick = () => {
-    if (navigator.onLine) updateOnlineStatus();
-    else {
-       const statusEl = document.getElementById('phone-status') || document.getElementById('login-status');
-       statusEl.textContent = 'עדיין אין חיבור...';
-       statusEl.className = 'login-status error';
+    otpInput.focus();
+    const len = otpInput.value.length;
+    if (typeof otpInput.setSelectionRange === 'function') {
+      otpInput.setSelectionRange(len, len);
+    }
+    if (autoOpen) {
+      otpInput.click();
     }
   };
+  if (defer) {
+    requestAnimationFrame(() => setTimeout(focusTarget, 60));
+    return;
+  }
+  focusTarget();
+}
+
+// --- App Flow ---
+
+async function startApp() {
+  if (appStarted || appStarting) {
+    return;
+  }
+  appStarting = true;
+
+  if (!listenersBound) {
+    listenersBound = true;
+    window.addEventListener('online', updateOnlineStatus);
+    window.addEventListener('offline', updateOnlineStatus);
+    document.getElementById('retry-internet-btn').onclick = updateOnlineStatus;
+  }
   
   if (!navigator.onLine) {
+    appStarting = false;
     updateOnlineStatus();
     return;
   }
 
-  const statusEl = document.getElementById('login-status');
+  setLoading(true, 'Initializing Telegram...');
   try {
-    statusEl.textContent = 'Initializing Telegram...';
     await window.TGClient.initClient();
-    statusEl.textContent = 'Checking session...';
+    showStatus('Checking session...');
     const authed = await window.TGClient.checkExistingSession();
     if (authed) {
-      statusEl.textContent = 'Authenticated! Redirecting...';
+      showStatus('Authenticated! Redirecting...');
       window.location.href = 'index.html';
       return;
     }
-    statusEl.textContent = 'Not logged in. Starting QR flow...';
+    setLoading(false);
+    appStarted = true;
   } catch(e) {
     console.error('[Login] Init error:', e);
-    statusEl.textContent = 'Init Error: ' + (e.message || e);
-    statusEl.className = 'login-status error';
-    return; // Stop if init fails
+    setLoading(false);
+    showStatus('Init Error: ' + (e.message || e), true);
+    appStarting = false;
+    return;
   }
+  appStarting = false;
 
-  // Start QR flow
+  setupCountryDetection();
+  setupCountryModal();
+  setupOtpBehavior();
   startQrFlow();
 
   SpatialNav.init(() => {
-    // Back on login → do nothing (can't exit)
+    if (typeof window.handleBack === 'function') {
+      window.handleBack();
+    }
   });
-  document.querySelector('#show-phone-btn').focus();
+  setTimeout(() => document.getElementById('btn-show-phone').focus(), 100);
 }
 
 function updateOnlineStatus() {
   const overlay = document.getElementById('no-internet-overlay');
   if (navigator.onLine) {
-    if (overlay.classList.contains('visible')) {
-      overlay.classList.remove('visible');
-      // Restart if we were stuck
-      startApp();
-    }
+    overlay.classList.remove('visible');
+    if(!window.TGClient.isAuthed && !appStarted && !appStarting) startApp();
   } else {
     overlay.classList.add('visible');
+    appStarted = false;
+    appStarting = false;
   }
 }
 
 function startQrFlow() {
-  const statusEl = document.getElementById('login-status');
-  statusEl.textContent = 'Generating QR code...';
-  statusEl.className = 'login-status';
-
+  showStep('step-qr');
+  setLoading(true, 'Generating QR code...');
+  
   window.TGClient.startQrLogin(
     (link) => {
-      statusEl.textContent = 'Waiting for scan...';
+      setLoading(false);
       if (!qrCode) {
         qrCode = new QRCode(document.getElementById('qrcode-el'), {
-          text: link, width: 200, height: 200,
-          colorDark: '#000000', colorLight: '#ffffff',
+          text: link, width: 220, height: 220,
+          colorDark: '#0f172a', colorLight: '#ffffff',
           correctLevel: QRCode.CorrectLevel.M
         });
       } else {
@@ -198,140 +317,401 @@ function startQrFlow() {
       }
     },
     (userId) => {
-      statusEl.textContent = 'Login successful! Loading...';
-      statusEl.className = 'login-status';
+      setLoading(true, 'Login successful! Loading...');
       setTimeout(() => { window.location.href = 'index.html'; }, 800);
     },
     (err) => {
-      statusEl.textContent = 'QR Error: ' + err;
-      statusEl.className = 'login-status error';
+      setLoading(false);
+      showStatus('QR Error: ' + err, true);
     }
   );
 }
 
-// Phone flow
-document.getElementById('show-phone-btn').onclick = () => {
-  clearStatus();
-  currentPhoneStep = 'phone';
-  document.getElementById('qr-panel').classList.add('hidden');
-  document.getElementById('phone-panel').classList.remove('hidden');
-  document.getElementById('phone-desc').textContent = 'Enter your phone number in international format (+972...)';
-  document.getElementById('phone-input').classList.remove('hidden');
-  document.getElementById('code-input').classList.add('hidden');
-  document.getElementById('pass-input').classList.add('hidden');
-  document.getElementById('change-number-btn').classList.add('hidden');
-  document.getElementById('phone-submit-btn').textContent = 'Send Code';
-  document.getElementById('phone-input').focus();
+// --- Phone Flow ---
+
+document.getElementById('btn-show-phone').onclick = () => showStep('step-phone', 'btn-country');
+document.getElementById('btn-back-to-qr').onclick = () => startQrFlow();
+document.getElementById('btn-change-number').onclick = () => {
+  stopResendTimer();
+  showStep('step-phone', 'phone-input');
 };
 
-document.getElementById('change-number-btn').onclick = () => {
-  clearStatus();
-  currentPhoneStep = 'phone';
-  document.getElementById('phone-input').classList.remove('hidden');
-  document.getElementById('code-input').classList.add('hidden');
-  document.getElementById('pass-input').classList.add('hidden');
-  document.getElementById('change-number-btn').classList.add('hidden');
-  document.getElementById('phone-desc').textContent = 'Enter your phone number in international format (+972...)';
-  document.getElementById('phone-submit-btn').textContent = 'Send Code';
+document.getElementById('btn-send-code').onclick = async () => {
+  const code = document.getElementById('country-code').textContent;
+  const num = document.getElementById('phone-input').value.trim().replace(/\D/g, '');
   
-  // Clear values
-  document.getElementById('code-input').value = '';
-  document.getElementById('pass-input').value = '';
+  // Validation: Min 8 digits total (including country code)
+  if (!num || (code + num).length < 8) {
+    showStatus('Please enter a valid phone number.', true);
+    const panel = document.getElementById('auth-panel');
+    panel.classList.add('error');
+    setTimeout(() => panel.classList.remove('error'), 500);
+    document.getElementById('phone-input').focus();
+    return;
+  }
   
-  document.getElementById('phone-input').focus();
+  currentPhone = code + num;
+  startPhoneAuth();
 };
 
-document.getElementById('back-to-qr-btn').onclick = () => {
-  document.getElementById('phone-panel').classList.add('hidden');
-  document.getElementById('qr-panel').classList.remove('hidden');
-};
-
-document.getElementById('phone-submit-btn').onclick = async () => {
-  const btn = document.getElementById('phone-submit-btn');
-  const statusEl = document.getElementById('phone-status');
-  btn.disabled = true;
-  statusEl.className = 'login-status';
-
-  if (currentPhoneStep === 'phone') {
-    const phone = document.getElementById('phone-input').value.trim();
-    if (!phone) { btn.disabled = false; return; }
-    statusEl.textContent = 'Requesting code...';
-
-    window.TGClient.startPhoneLogin(
-      phone,
-      (state) => {
-        if (state === 'wait_code') {
-          clearStatus();
-          currentPhoneStep = 'code';
-          document.getElementById('phone-input').classList.add('hidden');
-          document.getElementById('code-input').classList.remove('hidden');
-          document.getElementById('change-number-btn').classList.remove('hidden');
-          document.getElementById('phone-desc').textContent = `Code sent to ${phone}`;
-          btn.textContent = 'Verify Code';
-          btn.disabled = false;
-          document.getElementById('code-input').focus();
-        } else if (state === 'wait_password') {
-          clearStatus();
-          currentPhoneStep = 'password';
-          document.getElementById('code-input').classList.add('hidden');
-          document.getElementById('pass-input').classList.remove('hidden');
-          document.getElementById('phone-desc').textContent = 'Enter your 2FA password';
-          btn.textContent = 'Submit Password';
-          btn.disabled = false;
-          document.getElementById('pass-input').focus();
-        }
-      },
-      (userId) => {
-        statusEl.textContent = 'Login successful! Loading...';
-        statusEl.className = 'login-status success';
-        setTimeout(() => { window.location.href = 'index.html'; }, 800);
-      },
-      (err) => {
-        const errorMsg = String(err);
-        if (errorMsg.includes("wait of")) {
-          const seconds = errorMsg.match(/\d+/);
-          if (seconds) {
-            startFloodTimer(parseInt(seconds[0]));
-            return;
-          }
-        }
-        statusEl.textContent = 'Error: ' + err;
-        statusEl.className = 'login-status error';
-        btn.disabled = false;
+function startPhoneAuth() {
+  setLoading(true, 'Requesting code...');
+  window.TGClient.startPhoneLogin(
+    currentPhone,
+    (state) => {
+      setLoading(false);
+      if (state === 'wait_code') {
+        document.getElementById('otp-desc').textContent = `Code sent to ${currentPhone}`;
+        clearOtpBoxes();
+        showStep('step-otp');
+        focusOtpInput(true, true);
+        startResendTimer();
+      } else if (state === 'wait_password') {
+        showStep('step-password', 'pass-input');
       }
-    );
-  } else if (currentPhoneStep === 'code') {
-    const code = document.getElementById('code-input').value.trim();
-    if (!code) { btn.disabled = false; return; }
-    statusEl.textContent = 'Verifying code...';
-    window.TGClient.submitPhoneCode(code);
-    btn.disabled = false;
-  } else if (currentPhoneStep === 'password') {
-    const pass = document.getElementById('pass-input').value.trim();
-    if (!pass) { btn.disabled = false; return; }
-    statusEl.textContent = 'Verifying password...';
-    window.TGClient.submitPassword(pass);
-    btn.disabled = false;
+    },
+    (userId) => {
+      setLoading(true, 'Login successful! Loading...');
+      setTimeout(() => { window.location.href = 'index.html'; }, 800);
+    },
+    (err) => {
+      setLoading(false);
+      showStatus(err, true);
+      const panel = document.getElementById('auth-panel');
+      panel.classList.add('error');
+      setTimeout(() => panel.classList.remove('error'), 500);
+      
+      // Focus back on input
+      const input = document.getElementById('phone-input');
+      if (input) input.focus();
+    }
+  );
+}
+
+// --- OTP Logic ---
+
+document.getElementById('phone-input').addEventListener('input', (e) => {
+  if (e.target.value.length > 15) e.target.value = e.target.value.slice(0, 15);
+  e.target.value = e.target.value.replace(/\D/g, '');
+});
+
+// Prevent Up/Down arrows from changing numeric values (TV navigation fix)
+const preventStep = (e) => {
+  if (e.key === 'ArrowUp' || e.key === 'ArrowDown') e.preventDefault();
+};
+document.getElementById('phone-input').addEventListener('keydown', (e) => {
+  if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    e.target.blur();
+    document.getElementById('btn-send-code').focus();
+    return;
   }
+  if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    e.target.blur();
+    document.getElementById('btn-country').focus();
+    return;
+  }
+  preventStep(e);
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    document.getElementById('btn-send-code').click();
+  }
+});
+document.getElementById('phone-input').addEventListener('wheel', (e) => e.preventDefault(), { passive: false });
+
+function setupOtpBehavior() {
+  const renderOtpBoxes = () => {
+    const code = otpInput.value;
+    const activeIndex = Math.min(code.length, otpBoxes.length - 1);
+    otpBoxes.forEach((box, idx) => {
+      box.textContent = code[idx] || '';
+      box.classList.toggle('filled', !!code[idx]);
+      box.classList.toggle('active', otpRowFocused && idx === activeIndex);
+    });
+  };
+
+  const activateOtpInput = () => {
+    focusOtpInput(true, false);
+    renderOtpBoxes();
+  };
+
+  const deactivateOtpInput = () => {
+    otpRow.classList.remove('editing');
+    otpRow.classList.remove('focused');
+    otpRowFocused = false;
+    window._pauseSpatialNav = false;
+    otpInput.blur();
+    renderOtpBoxes();
+  };
+
+  const focusOtpAction = () => {
+    const resendBtn = document.getElementById('btn-resend');
+    if (!resendBtn.classList.contains('hidden')) {
+      resendBtn.focus();
+      return;
+    }
+    document.getElementById('btn-change-number').focus();
+  };
+
+  otpRow.addEventListener('click', activateOtpInput);
+  otpRow.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ' || e.key === 'Select' || e.key === 'Ok' || e.key === 'Center' || e.key === 'dpad_center') {
+      e.preventDefault();
+      activateOtpInput();
+      return;
+    }
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      deactivateOtpInput();
+      focusOtpAction();
+    }
+  });
+
+  otpRow.addEventListener('focus', () => {
+    otpRow.classList.add('focused');
+    otpRowFocused = true;
+    renderOtpBoxes();
+  });
+  otpRow.addEventListener('blur', () => {
+    if (document.activeElement !== otpInput) {
+      otpRow.classList.remove('editing');
+      otpRow.classList.remove('focused');
+      otpRowFocused = false;
+      window._pauseSpatialNav = false;
+      renderOtpBoxes();
+    }
+  });
+
+  otpInput.addEventListener('input', (e) => {
+    e.target.value = e.target.value.replace(/\D/g, '').slice(0, otpBoxes.length);
+    renderOtpBoxes();
+    if (e.target.value.length === otpBoxes.length) {
+      checkAutoSubmit();
+    }
+  });
+
+  otpInput.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      otpSuppressRefocus = true;
+      deactivateOtpInput();
+      focusOtpAction();
+      return;
+    }
+    if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      deactivateOtpInput();
+      otpRow.focus();
+      return;
+    }
+    if (e.key === 'Backspace') {
+      setTimeout(renderOtpBoxes, 0);
+    }
+  });
+
+  otpInput.addEventListener('blur', () => {
+    otpRow.classList.remove('editing');
+    window._pauseSpatialNav = false;
+    if (otpSuppressRefocus) {
+      otpRow.classList.remove('focused');
+      otpRowFocused = false;
+      renderOtpBoxes();
+      otpSuppressRefocus = false;
+      return;
+    }
+    otpRow.classList.add('focused');
+    otpRowFocused = true;
+    renderOtpBoxes();
+    const stepOtp = document.getElementById('step-otp');
+    if (
+      stepOtp.classList.contains('active') &&
+      document.activeElement !== document.getElementById('btn-change-number') &&
+      document.activeElement !== document.getElementById('btn-resend')
+    ) {
+      otpRow.focus();
+    }
+  });
+
+  otpInput.addEventListener('paste', (e) => {
+    e.preventDefault();
+    otpInput.value = (e.clipboardData || window.clipboardData)
+      .getData('text')
+      .replace(/\D/g, '')
+      .slice(0, otpBoxes.length);
+    renderOtpBoxes();
+    if (otpInput.value.length === otpBoxes.length) {
+      checkAutoSubmit();
+    }
+  });
+
+  renderOtpBoxes();
+}
+
+function clearOtpBoxes() {
+  otpInput.value = '';
+  otpInput.readOnly = false;
+  otpRow.classList.remove('editing');
+  otpRow.classList.remove('focused');
+  otpRowFocused = false;
+  window._pauseSpatialNav = false;
+  otpBoxes.forEach((b, idx) => {
+    b.textContent = '';
+    b.classList.remove('filled', 'error', 'active');
+  });
+}
+
+function triggerOtpError() {
+  otpBoxes.forEach(b => b.classList.add('error'));
+  // Also shake the whole panel for extra feedback
+  const panel = document.getElementById('auth-panel');
+  panel.classList.add('error');
+  
+  setTimeout(() => {
+    otpBoxes.forEach(b => b.classList.remove('error'));
+    panel.classList.remove('error');
+    clearOtpBoxes();
+    otpRow.focus();
+  }, 500);
+}
+
+function checkAutoSubmit() {
+  const code = otpInput.value;
+  if (code.length === 5) {
+    setLoading(true, 'Verifying code...');
+    setTimeout(() => {
+      // Small delay just to let UI settle
+      window.TGClient.submitPhoneCode(code);
+    }, 150);
+  }
+}
+
+// --- Password ---
+document.getElementById('btn-submit-pass').onclick = () => {
+  const pass = document.getElementById('pass-input').value;
+  if(!pass) return;
+  setLoading(true, 'Verifying password...');
+  window.TGClient.submitPassword(pass);
+};
+document.getElementById('pass-input').addEventListener('keydown', (e) => {
+  if(e.key === 'Enter') document.getElementById('btn-submit-pass').click();
+});
+
+// --- Resend Timer ---
+function startResendTimer() {
+  stopResendTimer();
+  resendSeconds = 60;
+  const tmrEl = document.getElementById('resend-timer');
+  const txtEl = document.getElementById('resend-text');
+  const btnEl = document.getElementById('btn-resend');
+  
+  txtEl.classList.remove('hidden');
+  btnEl.classList.add('hidden');
+  tmrEl.textContent = resendSeconds;
+  
+  resendTimer = setInterval(() => {
+    resendSeconds--;
+    if(resendSeconds <= 0) {
+      stopResendTimer();
+      txtEl.classList.add('hidden');
+      btnEl.classList.remove('hidden');
+    } else {
+      tmrEl.textContent = resendSeconds;
+    }
+  }, 1000);
+}
+
+function stopResendTimer() {
+  if(resendTimer) clearInterval(resendTimer);
+}
+
+document.getElementById('btn-resend').onclick = () => {
+  startPhoneAuth();
 };
 
-// Handle Enter to auto-submit fields
-document.getElementById('phone-input').addEventListener('keydown', function(e) {
-  if (e.key === 'Enter' && !this.readOnly) { e.preventDefault(); document.getElementById('phone-submit-btn').click(); }
-});
-document.getElementById('code-input').addEventListener('keydown', function(e) {
-  if (e.key === 'Enter' && !this.readOnly) { e.preventDefault(); document.getElementById('phone-submit-btn').click(); }
-});
-document.getElementById('pass-input').addEventListener('keydown', function(e) {
-  if (e.key === 'Enter' && !this.readOnly) { e.preventDefault(); document.getElementById('phone-submit-btn').click(); }
-});
-
-// MainActivity back button support
-window.handleBack = () => {
-  if (!document.getElementById('phone-panel').classList.contains('hidden')) {
-    document.getElementById('back-to-qr-btn').click();
+// --- Country detection & Modal ---
+function setupCountryDetection() {
+  let matched = null;
+  // 1. Language logic
+  if(navigator.languages && navigator.languages[0]) {
+    const parts = navigator.languages[0].split('-');
+    if(parts.length > 1) {
+      const code = parts[1].toUpperCase();
+      matched = COUNTRIES.find(c => c.c === code);
+    }
   }
-};
+  // 2. Default to IL if timezone is Jerusalem, or US fallback
+  if(!matched) {
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    if(tz === 'Asia/Jerusalem') matched = COUNTRIES.find(c => c.c === 'IL');
+    else matched = COUNTRIES[0]; // US
+  }
+  
+  if(matched) setCountry(matched);
+}
+
+function setCountry(cObj) {
+  document.getElementById('country-flag').textContent = cObj.f;
+  document.getElementById('country-code').textContent = cObj.d;
+}
+
+function setupCountryModal() {
+  const btn = document.getElementById('btn-country');
+  const modal = document.getElementById('country-modal');
+  const list = document.getElementById('country-list');
+  const search = document.getElementById('country-search');
+  
+  function renderList(query='') {
+    list.innerHTML = '';
+    const q = query.toLowerCase();
+    const filtered = COUNTRIES.filter(c => c.n.toLowerCase().includes(q) || c.d.includes(q));
+    
+    filtered.forEach(c => {
+      const div = document.createElement('div');
+      div.className = 'country-item focusable';
+      div.tabIndex = 0;
+      div.innerHTML = `
+        <span class="country-item-flag">${c.f}</span>
+        <span class="country-item-name">${c.n}</span>
+        <span class="country-item-code">${c.d}</span>
+      `;
+      div.onclick = () => {
+        setCountry(c);
+        closeModal();
+      };
+      div.addEventListener('keydown', e => {
+        if(e.key === 'Enter') div.click();
+      });
+      list.appendChild(div);
+    });
+  }
+  
+  btn.onclick = () => {
+    lastActiveBeforeModal = document.activeElement;
+    modal.classList.add('open');
+    renderList();
+    search.value = '';
+    setTimeout(() => search.focus(), 50);
+  };
+  
+  search.addEventListener('input', (e) => renderList(e.target.value));
+  
+  function closeModal() {
+    modal.classList.remove('open');
+    if(lastActiveBeforeModal) lastActiveBeforeModal.focus();
+  }
+  
+  modal.addEventListener('click', (e) => {
+    if(e.target === modal) closeModal();
+  });
+  
+  window.handleBack = () => {
+    if(modal.classList.contains('open')) closeModal();
+    else if(document.getElementById('step-phone').classList.contains('active')) document.getElementById('btn-back-to-qr').click();
+    else if(document.getElementById('step-otp').classList.contains('active')) document.getElementById('btn-change-number').click();
+    else if(document.getElementById('step-password').classList.contains('active')) showStep('step-otp', 'btn-change-number');
+  };
+}
 
 startApp();
 </script>

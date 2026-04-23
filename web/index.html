@@ -51,7 +51,7 @@
 </div>
 
 <!-- Sync Overlay -->
-<div id="sync-overlay" style="display:none;position:fixed;inset:0;background:rgba(11,12,16,0.9);z-index:9998;flex-direction:column;align-items:center;justify-content:center;backdrop-filter:blur(10px);">
+<div id="sync-overlay" style="display:none;position:fixed;inset:0;background:rgba(11,12,16,0.96);z-index:9998;flex-direction:column;align-items:center;justify-content:center;">
   <span class="spin" style="font-size:4rem;margin-bottom:24px;">🔄</span>
   <h2 style="font-size:2.5rem;margin-bottom:12px;font-weight:800;color:white;">Syncing Library...</h2>
   <p id="sync-overlay-text" style="color:#94A3B8;font-size:1.2rem;">Downloading channels from Telegram</p>
@@ -298,6 +298,9 @@
         <button class="btn btn-secondary focusable" id="choice-manual" tabindex="0" onclick="goToAddStep('link')">
           ⌨️ Enter Link Manually
         </button>
+        <button class="btn btn-primary focusable" id="choice-my-channels" tabindex="0" onclick="closeModal('add-source-modal'); openChannelPicker();">
+          📋 Add from My Telegram Channels
+        </button>
         <button class="btn btn-secondary focusable" onclick="closeModal('add-source-modal')" tabindex="0" style="margin-top:20px; opacity:0.6;">Cancel</button>
       </div>
     </div>
@@ -375,6 +378,71 @@
           <div style="font-size:0.8rem; opacity:0.7;">Each sub-group is a different show</div>
         </button>
         <button class="btn btn-secondary focusable" onclick="goToAddStep('confirm')" tabindex="0" style="margin-top:20px; opacity:0.6;">Back</button>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ── Channel Picker Modal ─────────────────────────────── -->
+<div id="channel-picker-modal" class="modal-overlay cpicker-overlay" style="display:none;">
+  <div class="cpicker-box">
+
+    <!-- Header -->
+    <div class="cpicker-header">
+      <div>
+        <h2 class="cpicker-title">📋 My Telegram Channels</h2>
+        <p class="cpicker-subtitle" id="cpicker-subtitle">Loading your channels...</p>
+      </div>
+      <button class="cpicker-close focusable" id="cpicker-close-btn" tabindex="0" onclick="closeChannelPicker()">✕</button>
+    </div>
+
+    <!-- Search Bar -->
+    <div class="cpicker-search-wrap">
+      <span class="cpicker-search-icon">🔍</span>
+      <input
+        type="text"
+        id="cpicker-search"
+        class="cpicker-search-input focusable"
+        placeholder="Search channels..."
+        tabindex="0"
+        autocomplete="off"
+        spellcheck="false"
+        readonly
+      >
+      <span class="cpicker-search-count" id="cpicker-search-count"></span>
+    </div>
+
+    <!-- Loading / Error / Empty States -->
+    <div id="cpicker-state-loading" class="cpicker-state" style="display:none;">
+      <span class="spin" style="font-size:2.5rem;">⏳</span>
+      <p id="cpicker-loading-text">Fetching your channels from Telegram...</p>
+      <div class="cpicker-progress-bar-wrap"><div class="cpicker-progress-bar" id="cpicker-progress-bar"></div></div>
+    </div>
+    <div id="cpicker-state-error" class="cpicker-state" style="display:none;">
+      <span style="font-size:2.5rem;">⚠️</span>
+      <p id="cpicker-error-msg">Failed to load channels.</p>
+      <button class="btn btn-secondary focusable" tabindex="0" onclick="openChannelPicker()">Retry</button>
+    </div>
+    <div id="cpicker-state-empty" class="cpicker-state" style="display:none;">
+      <span style="font-size:2.5rem;">📭</span>
+      <p>No channels found in your Telegram account.</p>
+    </div>
+
+    <!-- Virtualized Channel List -->
+    <div id="cpicker-list-wrap" class="cpicker-list-wrap" style="display:none;">
+      <div id="cpicker-list-viewport" class="cpicker-list-viewport" tabindex="-1">
+        <!-- JS-rendered virtual rows go here -->
+        <div id="cpicker-list-spacer" class="cpicker-list-spacer"></div>
+        <div id="cpicker-list-content" class="cpicker-list-content"></div>
+      </div>
+    </div>
+
+    <!-- Footer -->
+    <div class="cpicker-footer">
+      <span class="cpicker-selection-count" id="cpicker-sel-count">0 selected</span>
+      <div class="cpicker-footer-btns">
+        <button class="btn btn-primary focusable" id="cpicker-confirm-btn" tabindex="0" onclick="confirmChannelPicker()" disabled>✅ Add Selected</button>
       </div>
     </div>
 
@@ -485,6 +553,7 @@ let lastActiveElement = null; // Used to restore focus after modal/sidebar close
 let currentSettings = { auto_next_enabled: 1, auto_next_countdown: 15, seek_step: 15 };
 let wizardPendingData = { name: '', link: '', isSingle: true, photo: null };
 let wizardStepHistory = [];
+let pickerQueue = []; // Queue for batch-adding from My Telegram Channels
 let autoNextActive = false;
 let autoNextTimer = null;
 let progressDebounce = null;
@@ -494,6 +563,13 @@ let lastFocusedSourceId = null;
 let shareQrGenerated = false;
 let shareSseSource = null;
 let controlsHideTimer = null;
+window.nativeDebugEnabled = false;
+
+(() => {
+  const isNativeAndroid = !!(window.Capacitor && /Android/i.test(navigator.userAgent || ''));
+  const perfLite = isNativeAndroid && ((navigator.hardwareConcurrency || 4) <= 4);
+  document.body.classList.toggle('perf-lite', perfLite);
+})();
 
 // ── Utilities ────────────────────────────────────────────────────────────
 
@@ -605,10 +681,13 @@ function handleBack() {
     if (openOverlay.id === 'add-source-modal' && wizardStepHistory.length > 1) {
         wizardStepHistory.pop(); // Remove current screen
         const prevStep = wizardStepHistory[wizardStepHistory.length - 1];
-        // Note: we don't call goToAddStep(prevStep) directly if it re-pushes, 
-        // but our new logic in goToAddStep handles truncation correctly.
         goToAddStep(prevStep);
         return;
+    }
+    // SPECIAL CASE: Channel Picker has its own internal back-stack (list-inner -> list-outer)
+    if (openOverlay.id === 'channel-picker-modal') {
+      _cpickerHandleBack(); 
+      return;
     }
     closeModal(openOverlay.id);
     return;
@@ -1601,15 +1680,16 @@ async function validateStepLink(isAuto = false) {
   try {
     const { channelArg } = await window.TGClient.resolveChannelFromLink(link);
     const entity = await window.TGClient.getEntity(channelArg);
-    // If isAuto, we keep the name provided by the phone, otherwise use Telegram's name
-    if (!isAuto) {
+    
+    // If we're coming from the Picker, we skip fetching as we already have name/photo
+    if (wizardPendingData.fromPicker) {
+      // Data already set, proceed to confirm
+    } else if (!isAuto) {
       wizardPendingData.name = entity.title || entity.username || 'Telegram Channel';
+      wizardPendingData.photo = await window.TGClient.downloadProfilePhoto(entity);
     }
     
-    // Attempt photo download (always good for the UI)
-    wizardPendingData.photo = await window.TGClient.downloadProfilePhoto(entity);
-    
-    if (isAuto) {
+    if (isAuto && !wizardPendingData.fromPicker) {
         // Mobile wizard already confirmed name/type, just finish
         console.log('[Wizard] Auto-finishing with data:', wizardPendingData);
         finalizeWizardAdd();
@@ -1685,9 +1765,36 @@ async function submitWizardSource() {
     
     await loadSources();
     startIndexPoll(true);
-    showToast('Source added and indexing started!', 'success');
+    showToast(`Added: ${wizardPendingData.name}`, 'success');
     
-    // Clear inputs for next time
+    // Check for next in queue
+    if (pickerQueue.length > 0) {
+      const next = pickerQueue.shift();
+      wizardPendingData = { 
+        name: next.name, 
+        link: next.link, 
+        photo: next.photo, 
+        isSingle: true,
+        fromPicker: true
+      };
+      
+      // Re-open wizard modal for the next item
+      requestAnimationFrame(() => {
+        document.getElementById('fetched-name-display').textContent = wizardPendingData.name;
+        const avatarCont = document.getElementById('confirm-source-avatar-container');
+        if (wizardPendingData.photo) {
+          avatarCont.innerHTML = `<img src="${wizardPendingData.photo}" style="width:100px; height:100px; border-radius:50%; border:3px solid var(--accent); object-fit: cover;">`;
+        } else {
+          avatarCont.innerHTML = `<div class="card-avatar-placeholder" style="width:100px; height:100px; font-size:2.5rem;">📡</div>`;
+        }
+        
+        openModal('add-source-modal');
+        goToAddStep('confirm');
+      });
+      return; // Stop here, loop continues through next submission
+    }
+    
+    // Clear inputs if fully done
     document.getElementById('wizard-link-input').value = '';
     document.getElementById('wizard-name-input').value = '';
   } catch(e) {
@@ -2155,6 +2262,508 @@ async function handleForceSync() {
   }
 }
 
+// ── Channel Picker ────────────────────────────────────────────────────────────
+
+const CPICKER = {
+  allChannels: [],       // full unfiltered dataset
+  filtered: [],          // current filtered view
+  selected: new Set(),   // selected channel IDs — O(1)
+  existingLinks: new Set(),
+  ROW_HEIGHT: 72,        // must match CSS .cpicker-row height
+  VISIBLE_BUFFER: 4,
+  scrollTop: 0,
+  focusedIdx: -1,        // ← KEY: integer index, not a DOM ref
+  isLoading: false,
+  isDone: false,
+  _searchTimer: null,
+  dom: {},
+};
+
+function openChannelPicker() {
+  window._pauseSpatialNav = true; // Lock the global spatial nav engine
+  openModal('channel-picker-modal');
+  const modal = document.getElementById('channel-picker-modal');
+
+  CPICKER.dom = {
+    modal,
+    subtitle:    document.getElementById('cpicker-subtitle'),
+    stateLoad:   document.getElementById('cpicker-state-loading'),
+    stateErr:    document.getElementById('cpicker-state-error'),
+    stateEmpty:  document.getElementById('cpicker-state-empty'),
+    listWrap:    document.getElementById('cpicker-list-wrap'),
+    viewport:    document.getElementById('cpicker-list-viewport'),
+    spacer:      document.getElementById('cpicker-list-spacer'),
+    content:     document.getElementById('cpicker-list-content'),
+    searchInput: document.getElementById('cpicker-search'),
+    searchCount: document.getElementById('cpicker-search-count'),
+    selCount:    document.getElementById('cpicker-sel-count'),
+    confirmBtn:  document.getElementById('cpicker-confirm-btn'),
+    progressBar: document.getElementById('cpicker-progress-bar'),
+    loadingText: document.getElementById('cpicker-loading-text'),
+    errorMsg:    document.getElementById('cpicker-error-msg'),
+    closeBtn:    document.getElementById('cpicker-close-btn'),
+  };
+
+  // Deterministic state
+  CPICKER.navMode = 'loading'; // 'header-search', 'header-close', 'list-outer', 'list-inner', 'footer'
+  CPICKER.allChannels = [];
+  CPICKER.filtered    = [];
+  CPICKER.selected.clear();
+  CPICKER.focusedIdx  = 0;
+  CPICKER.isLoading   = false;
+  CPICKER.isDone      = false;
+
+  // Pre-load existing sources for dedup highlight
+  window.DB.getSources(userId).then(sources => {
+    CPICKER.existingLinks = new Set(sources.map(s => s.link));
+  });
+
+  // ----- FIX 1: search stays readonly; keyboard never auto-pops -----
+  // The input is kept readonly always. We only unlock it when the user
+  // explicitly navigates to it and presses Enter/OK.
+  const si = CPICKER.dom.searchInput;
+  si.setAttribute('readonly', '');
+  si.value = '';
+
+  // Explicit initialization of state
+  CPICKER.navMode = 'header-close';
+  _cpickerSyncUI();
+
+  // Debounced search
+  si.oninput = () => {
+    clearTimeout(CPICKER._searchTimer);
+    CPICKER._searchTimer = setTimeout(() => {
+      CPICKER.focusedIdx = 0;
+      _cpickerApplySearch();
+    }, 220);
+  };
+
+  // NEW: Handle Keyboard Enter to jump to results
+  si.onkeydown = (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      si.blur();
+      if (CPICKER.filtered.length > 0) {
+        CPICKER.navMode = 'list-inner';
+        CPICKER.focusedIdx = 0;
+        _cpickerSyncUI();
+      }
+    }
+  };
+
+  // Virtualizer scroll hook
+  CPICKER.dom.viewport.onscroll = () => {
+    CPICKER.scrollTop = CPICKER.dom.viewport.scrollTop;
+    _cpickerRender();
+  };
+
+  // D-pad handler — capture phase on the modal div itself
+  modal.addEventListener('keydown', _cpickerKeydown, true);
+
+  _cpickerShowState('loading');
+  _cpickerLoadChannels();
+}
+
+function closeChannelPicker() {
+  window._pauseSpatialNav = false; // Restore global spatial nav engine
+  const modal = document.getElementById('channel-picker-modal');
+  window.removeEventListener('keydown', _cpickerKeydown, { capture: true });
+  
+  const si = document.getElementById('cpicker-search');
+  if (si) { si.value = ''; si.setAttribute('readonly', ''); }
+  CPICKER.selected.clear();
+  closeModal('channel-picker-modal');
+}
+
+function _cpickerShowState(state) {
+  const { stateLoad, stateErr, stateEmpty, listWrap } = CPICKER.dom;
+  stateLoad.style.display  = state === 'loading' ? 'flex' : 'none';
+  stateErr.style.display   = state === 'error'   ? 'flex' : 'none';
+  stateEmpty.style.display = state === 'empty'   ? 'flex' : 'none';
+  listWrap.style.display   = state === 'list'    ? 'flex' : 'none';
+}
+
+async function _cpickerLoadChannels() {
+  CPICKER.isLoading = true;
+  let loaded = 0;
+  let firstBatch = true;
+
+  try {
+    const gen = window.TGClient.getChannelsPaged(100);
+    for await (const batch of gen) {
+      const existingIds = new Set(CPICKER.allChannels.map(c => c.id));
+      const fresh = batch.filter(c => !existingIds.has(c.id));
+      CPICKER.allChannels.push(...fresh);
+      loaded += fresh.length;
+
+      const pct = Math.min(100, Math.round((loaded / 500) * 100));
+      CPICKER.dom.progressBar.style.width = pct + '%';
+      CPICKER.dom.loadingText.textContent = `Loaded ${loaded} channels...`;
+
+      if (firstBatch && CPICKER.allChannels.length > 0) {
+        firstBatch = false;
+        CPICKER.focusedIdx = 0;
+        _cpickerShowState('list');
+      }
+      _cpickerApplySearch(); // We no longer pass doFocus.
+    }
+
+    CPICKER.isDone = true;
+    CPICKER.isLoading = false;
+
+    if (CPICKER.allChannels.length === 0) {
+      _cpickerShowState('empty');
+    } else {
+      _cpickerShowState('list');
+      _cpickerApplySearch();
+    }
+  } catch (e) {
+    console.error('[ChannelPicker] Load error:', e);
+    CPICKER.dom.errorMsg.textContent = 'Failed: ' + e.message;
+    _cpickerShowState('error');
+    CPICKER.isLoading = false;
+  }
+}
+
+function _cpickerApplySearch() {
+  const query = (CPICKER.dom.searchInput.value || '').toLowerCase().trim();
+  CPICKER.filtered = query
+    ? CPICKER.allChannels.filter(c =>
+        c.name.toLowerCase().includes(query) ||
+        (c.username && c.username.toLowerCase().includes(query)))
+    : CPICKER.allChannels;
+
+  const count = CPICKER.filtered.length;
+  CPICKER.dom.searchCount.textContent = count > 0 ? `${count}` : '';
+  CPICKER.dom.subtitle.textContent = CPICKER.isDone
+    ? `${CPICKER.allChannels.length} channels`
+    : 'Loading...';
+
+  // Clamp focusedIdx to new list size
+  CPICKER.focusedIdx = Math.max(0, Math.min(CPICKER.focusedIdx, count - 1));
+
+  CPICKER.dom.viewport.scrollTop = 0;
+  CPICKER.scrollTop = 0;
+  _cpickerRender();
+}
+
+// ── Core virtualizer ──────────────────────────────────────────────────────────
+function _cpickerRender() {
+  const { filtered, selected, existingLinks, ROW_HEIGHT, VISIBLE_BUFFER, focusedIdx } = CPICKER;
+  const { spacer, content, viewport } = CPICKER.dom;
+
+  const total  = filtered.length;
+  const vpH    = viewport.clientHeight || 480;
+  const scroll = CPICKER.scrollTop;
+
+  spacer.style.height = (total * ROW_HEIGHT) + 'px';
+
+  const first = Math.max(0, Math.floor(scroll / ROW_HEIGHT) - VISIBLE_BUFFER);
+  const last  = Math.min(total - 1, Math.ceil((scroll + vpH) / ROW_HEIGHT) + VISIBLE_BUFFER);
+
+  const frag = document.createDocumentFragment();
+  for (let i = first; i <= last; i++) {
+    const ch = filtered[i];
+    if (!ch) continue;
+    const isSel = selected.has(ch.id);
+    const isEx  = existingLinks.has(ch.link);
+    const isFoc = (i === focusedIdx);
+
+    const isInnerMode = CPICKER.navMode === 'list-inner';
+    const row = document.createElement('div');
+    row.className = 'cpicker-row' +
+      (isSel ? ' cpicker-row--selected' : '') +
+      (isEx  ? ' cpicker-row--exists'   : '') +
+      ((isFoc && isInnerMode) ? ' cpicker-row--focused'  : '');
+    row.style.cssText = `position:absolute;top:${i*ROW_HEIGHT}px;left:0;right:0;height:${ROW_HEIGHT}px;`;
+    row.dataset.idx = i;
+    // ALWAYS -1: Visual focus only! Hardware focus remains anchored to Search bar.
+    row.tabIndex = -1;
+    row.setAttribute('role', 'checkbox');
+    row.setAttribute('aria-checked', isSel);
+
+    const icon = ch.isChannel ? '📡' : '💬';
+    const existsBadge = isEx ? `<span class="cpicker-exists-badge">Added</span>` : '';
+    const checkIcon = isSel ? '✓' : '';
+
+    row.innerHTML = `
+      <div class="cpicker-row-check">${checkIcon}</div>
+      <div class="cpicker-row-avatar">${icon}</div>
+      <div class="cpicker-row-info">
+        <div class="cpicker-row-name">${ch.name}${existsBadge}</div>
+        <div class="cpicker-row-link">${ch.username ? '@'+ch.username : ch.link}</div>
+      </div>`;
+
+    row.onclick = () => {
+      CPICKER.focusedIdx = i;
+      _cpickerToggle(ch.id);
+    };
+    frag.appendChild(row);
+  }
+
+  content.innerHTML = '';
+  content.appendChild(frag);
+}
+
+// Scroll viewport so focusedIdx row is comfortably visible
+function _cpickerScrollToFocused() {
+  const { focusedIdx, ROW_HEIGHT, dom } = CPICKER;
+  const vp = dom.viewport;
+  const rowTop = focusedIdx * ROW_HEIGHT;
+  const vpH    = vp.clientHeight || 480;
+
+  // Keep the focused item near the top (1/5th from top) rather than center
+  // this gives the user context of what is coming next.
+  const offset = vpH * 0.2; 
+  const desiredScroll = rowTop - offset;
+  
+  vp.scrollTop = Math.max(0, desiredScroll);
+  CPICKER.scrollTop = vp.scrollTop;
+  _cpickerRender();
+}
+
+function _cpickerToggle(channelId) {
+  const ch = CPICKER.allChannels.find(c => c.id === channelId);
+  if (ch && CPICKER.existingLinks.has(ch.link)) {
+    showToast('Channel already added to yours library', 'info');
+    return;
+  }
+
+  const wasSelected = CPICKER.selected.has(channelId);
+  if (wasSelected) CPICKER.selected.delete(channelId);
+  else CPICKER.selected.add(channelId);
+  
+  _cpickerUpdateFooter();
+
+  // INSTEAD of re-render(false), find the row and update it surgically
+  // This prevents focus-loss because the element remains in DOM.
+  const row = CPICKER.dom.content.querySelector(`[data-idx="${CPICKER.focusedIdx}"]`);
+  if (row) {
+    const isNowSelected = !wasSelected;
+    row.classList.toggle('cpicker-row--selected', isNowSelected);
+    row.setAttribute('aria-checked', isNowSelected);
+    const checkEl = row.querySelector('.cpicker-row-check');
+    if (checkEl) checkEl.textContent = isNowSelected ? '✓' : '';
+  } else {
+    // Fallback if row not visible
+    _cpickerRender();
+  }
+}
+
+function _cpickerUpdateFooter() {
+  const n = CPICKER.selected.size;
+  CPICKER.dom.selCount.textContent = n === 0
+    ? ''
+    : `${n} channel${n > 1 ? 's' : ''} selected`;
+  CPICKER.dom.confirmBtn.disabled = n === 0;
+}
+
+function _cpickerHandleBack() {
+  if (CPICKER.navMode === 'list-inner') {
+    console.log('[CPICKER] Back Triggered: Zooming out of list-inner');
+    CPICKER.navMode = 'list-outer';
+    _cpickerSyncUI();
+  } else {
+    console.log('[CPICKER] Back Triggered: Closing modal');
+    closeChannelPicker();
+  }
+}
+
+// ── Keyboard handler — Deterministic State Machine ──────
+function _cpickerKeydown(e) {
+  const key = e.key;
+  if (!['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Enter',' ','Escape','GoBack'].includes(key)) return;
+
+  const isTyping = !CPICKER.dom.searchInput.readOnly;
+  if (isTyping && (key === 'ArrowLeft' || key === 'ArrowRight')) return;
+
+  // IMPORTANT: Stop propagation immediately so the global SpatialNav Back handler 
+  // doesn't close the modal while we are trying to just "zoom out" of the list.
+  e.preventDefault(); 
+  e.stopPropagation(); 
+  e.stopImmediatePropagation();
+
+  const total = CPICKER.filtered.length;
+  const currentMode = CPICKER.navMode;
+
+  if (key === 'ArrowDown') {
+    if (currentMode === 'header-close') {
+      CPICKER.navMode = 'header-search';
+      _cpickerSyncUI();
+    } else if (currentMode === 'header-search' || currentMode === 'loading') {
+      if (total > 0) {
+        CPICKER.navMode = 'list-outer';
+        if (CPICKER.focusedIdx < 0) CPICKER.focusedIdx = 0;
+        _cpickerSyncUI();
+      } else if (!CPICKER.dom.confirmBtn.disabled) {
+        CPICKER.navMode = 'footer';
+        _cpickerSyncUI();
+      }
+    } else if (currentMode === 'list-outer') {
+      // Go to footer only if it exists/button is visible
+      CPICKER.navMode = 'footer';
+      _cpickerSyncUI();
+    } else if (currentMode === 'list-inner') {
+      if (CPICKER.focusedIdx < total - 1) {
+        CPICKER.focusedIdx++;
+        _cpickerSyncUI();
+      }
+    }
+  } else if (key === 'ArrowUp') {
+    if (currentMode === 'header-search') {
+      CPICKER.navMode = 'header-close';
+      _cpickerSyncUI();
+    } else if (currentMode === 'list-outer') {
+      CPICKER.navMode = 'header-search';
+      _cpickerSyncUI();
+    } else if (currentMode === 'footer') {
+      if (total > 0) CPICKER.navMode = 'list-outer';
+      else CPICKER.navMode = 'header-search';
+      _cpickerSyncUI();
+    } else if (currentMode === 'list-inner') {
+      if (CPICKER.focusedIdx > 0) {
+        CPICKER.focusedIdx--;
+        _cpickerSyncUI();
+      }
+    }
+  } else if (key === 'ArrowRight') {
+    // If you are at search, right doesn't go to close (since close is physically above it)
+    // but we can leave it as a shortcut, or just remove it to enforce pure vertical layout
+    if (currentMode === 'header-search') {
+      CPICKER.navMode = 'header-close';
+      _cpickerSyncUI();
+    }
+  } else if (key === 'ArrowLeft') {
+    if (currentMode === 'header-close') {
+      CPICKER.navMode = 'header-search';
+      _cpickerSyncUI();
+    }
+  } else if (key === 'Enter' || key === ' ') {
+    if (currentMode === 'list-inner') {
+      const ch = CPICKER.filtered[CPICKER.focusedIdx];
+      if (ch) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        _cpickerToggle(ch.id);
+      }
+    } else if (currentMode === 'header-search') {
+      CPICKER.dom.searchInput.removeAttribute('readonly');
+      CPICKER.dom.searchInput.focus();
+    } else if (currentMode === 'list-outer') {
+      // Enter drill-down mode
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      CPICKER.navMode = 'list-inner';
+      _cpickerSyncUI();
+    } else if (currentMode === 'header-close') {
+      closeChannelPicker();
+    } else if (currentMode === 'footer') {
+      confirmChannelPicker();
+    }
+  } else if (key === 'Escape' || key === 'GoBack') {
+    _cpickerHandleBack();
+  }
+}
+
+function _cpickerSyncUI() {
+  const { searchInput, closeBtn, confirmBtn } = CPICKER.dom;
+  const mode = CPICKER.navMode;
+
+  console.log(`[CPICKER] SyncUI mode=${mode} idx=${CPICKER.focusedIdx}`);
+
+  const box = document.querySelector('.cpicker-box');
+  const footer = document.querySelector('.cpicker-footer');
+  if (!box) return;
+
+  // 1. Total Visual Cleanup - Clear all potential focus classes from everywhere
+  box.classList.remove('list-inner-active', 'search-focused');
+  const viewportOuter = document.getElementById('cpicker-list-viewport');
+  if (viewportOuter) viewportOuter.classList.remove('cpicker-list-outer-focus');
+  if (footer) footer.classList.remove('footer-focused');
+
+  // 2. Apply Visual Focus State based on current mode
+  if (mode === 'list-inner') {
+    box.classList.add('list-inner-active');
+    searchInput.setAttribute('readonly', 'true');
+    searchInput.classList.remove('focusable');
+  } else if (mode === 'list-outer') {
+    if (viewportOuter) viewportOuter.classList.add('cpicker-list-outer-focus');
+    searchInput.setAttribute('readonly', 'true');
+    searchInput.classList.remove('focusable');
+  } else if (mode === 'header-search') {
+    box.classList.add('search-focused');
+    searchInput.setAttribute('readonly', 'true');
+    searchInput.classList.add('focusable');
+  } else if (mode === 'footer') {
+    if (footer) footer.classList.add('footer-focused');
+    searchInput.setAttribute('readonly', 'true');
+    searchInput.classList.remove('focusable');
+  } else if (mode === 'header-close') {
+    searchInput.setAttribute('readonly', 'true');
+    searchInput.classList.remove('focusable');
+  }
+
+  // 3. Physical Focus Management
+  searchInput.tabIndex = -1;
+  closeBtn.tabIndex    = -1;
+  confirmBtn.tabIndex  = -1;
+
+  if (mode === 'header-close') {
+    closeBtn.tabIndex = 0;
+    closeBtn.focus();
+  } else if (mode === 'footer') {
+    // IMPORTANT: A disabled button cannot be .focus() specifically in some WebViews.
+    // We make it tabbable anyway so document.activeElement has a home.
+    confirmBtn.tabIndex = 0;
+    confirmBtn.focus();
+    // If it STILL didn't take focus (because disabled), we anchor to search as fallback
+    if (document.activeElement !== confirmBtn) {
+       searchInput.tabIndex = 0;
+       searchInput.focus();
+    }
+  } else {
+    // Both header-search and list modes anchor to searchInput
+    searchInput.tabIndex = 0;
+    if (document.activeElement !== searchInput) searchInput.focus();
+    if (mode === 'list-inner') _cpickerScrollToFocused();
+  }
+  
+  _cpickerRender();
+}
+
+async function confirmChannelPicker() {
+  const selectedChannels = CPICKER.allChannels.filter(c => CPICKER.selected.has(c.id));
+  if (selectedChannels.length === 0) return;
+
+  // Store in queue
+  pickerQueue = [...selectedChannels];
+  
+  // Close picker
+  closeChannelPicker();
+
+  // Start the first one
+  const first = pickerQueue.shift();
+  wizardPendingData = {
+    name: first.name,
+    link: first.link,
+    photo: first.photo,
+    isSingle: true,
+    fromPicker: true
+  };
+
+  // Open the wizard modal at the confirmation step
+  document.getElementById('fetched-name-display').textContent = wizardPendingData.name;
+  const avatarCont = document.getElementById('confirm-source-avatar-container');
+  if (wizardPendingData.photo) {
+    avatarCont.innerHTML = `<img src="${wizardPendingData.photo}" style="width:100px; height:100px; border-radius:50%; border:3px solid var(--accent); object-fit: cover;">`;
+  } else {
+    avatarCont.innerHTML = `<div class="card-avatar-placeholder" style="width:100px; height:100px; font-size:2.5rem;">📡</div>`;
+  }
+
+  openModal('add-source-modal');
+  goToAddStep('confirm');
+}
+
 // Handle setting row clicks for D-pad toggling
 document.querySelectorAll('.settings-row').forEach(row => {
   row.addEventListener('click', (e) => {
@@ -2251,6 +2860,9 @@ async function playEpisode(ep) {
   if (isPlayingLock) return;
   isPlayingLock = true;
   appLog(`[Playback] Selected Episode ${ep.episodeNumber}: ${ep.title}`, '#38bdf8');
+  if (window.AppIndexer && window.AppIndexer.pause) {
+    window.AppIndexer.pause();
+  }
   
   try {
     currentPlayingEp = ep;
@@ -2280,6 +2892,9 @@ async function playEpisode(ep) {
       showToast('Could not load video metadata', 'error'); 
       isPlayingLock = false;
       return; 
+    }
+    if (meta.message) {
+      meta.message.sourceId = ep.sourceId || null;
     }
 
     // The streaming logic now hands off to native ExoPlayer plugin
@@ -2314,6 +2929,9 @@ async function playEpisode(ep) {
       playerVideo.onloadedmetadata(); 
     }
   } catch(e) {
+    if (window.AppIndexer && window.AppIndexer.resume) {
+      window.AppIndexer.resume();
+    }
     appLog(`[Playback ERROR] ${e.message}`, '#ef4444', 'error');
     showToast('Stream failed: ' + e.message, 'error');
   } finally {
@@ -2328,6 +2946,9 @@ function closePlayerUIOnly() {
   if (isPlayingLock) {
     console.log('[closePlayerUIOnly] Skipped — new episode is loading.');
     return;
+  }
+  if (window.AppIndexer && window.AppIndexer.resume) {
+    window.AppIndexer.resume();
   }
   // Only called by native player_closed event to cleanup JS state
   if (catalogView === 'episodes' && currentSeason) loadEpisodes(currentSeason);
@@ -2425,14 +3046,22 @@ document.getElementById('btn-forward').onclick = () => {
 // Debug console logic
 async function appLog(msg, color = '#22c55e', level = 'info') {
   console.log(`[APP-LOG] ${msg}`);
+
+  const debugPanel = document.getElementById('debug-panel');
+  const debugVisible = !!debugPanel && debugPanel.style.display !== 'none';
+  const shouldBridgeLog = window.nativeDebugEnabled || level === 'error';
   
   // Also send to Native if plugin is available
   try {
      const { StreamPlayer } = window.Capacitor.Plugins;
-     if (StreamPlayer && StreamPlayer.logToNative) {
+     if (shouldBridgeLog && StreamPlayer && StreamPlayer.logToNative) {
         await StreamPlayer.logToNative({ msg, level });
      }
   } catch(e) {}
+
+  if (!debugVisible && level !== 'error') {
+    return;
+  }
 
   const content = document.getElementById('debug-content');
   if (!content) return;
@@ -2453,6 +3082,7 @@ document.getElementById('btn-debug').onclick = () => {
   const panel = document.getElementById('debug-panel');
   const isHidden = panel.style.display === 'none';
   panel.style.display = isHidden ? 'block' : 'none';
+  window.nativeDebugEnabled = isHidden;
   appLog(`Debugger ${isHidden ? 'Enabled' : 'Disabled'}`, isHidden ? '#38bdf8' : '#94a3b8');
   showControls();
 };
@@ -2630,6 +3260,15 @@ async function startApp() {
       window.location.replace('login.html');
       return;
     }
+
+    if (loaderText) loaderText.textContent = 'Loading Library...';
+    window.TGClient.bootstrapNativeSession()
+      .then(result => {
+        window.NativePlaybackReady = !!result;
+      })
+      .catch(() => {
+        window.NativePlaybackReady = false;
+      });
     
     // Hide loader, show app
     document.getElementById('initial-loader').style.display = 'none';

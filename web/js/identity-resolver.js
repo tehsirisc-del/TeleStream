@@ -44,6 +44,8 @@ function _similarity(normA, normB) {
   if (normA.includes(normB) || normB.includes(normA)) {
     const shorter = Math.min(normA.length, normB.length);
     const longer  = Math.max(normA.length, normB.length);
+    // If one is a significant part of the other (at least 60% of length), boost heavily
+    if (shorter / longer >= 0.6) return 0.98;
     return Math.max(0.85, shorter / longer);
   }
   const dist   = _levenshtein(normA, normB);
@@ -143,7 +145,8 @@ class IdentityResolver {
       if (checkEpisode && score >= 0.40 && score < effectiveThreshold) {
         const graph = this._seriesEpisodes.get(seriesId);
         if (graph && graph.has(epKey)) {
-          score += this.GRAPH_OVERLAP_BONUS;
+          // If they share the EXACT SAME episode, they are likely the same series
+          score += 0.50; // Heavy boost
           if (score > bestScore) {
             bestScore = score;
             bestId = seriesId;

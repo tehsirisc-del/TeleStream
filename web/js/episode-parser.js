@@ -265,7 +265,7 @@ function normalizeSeriesTitle(title) {
       .trim();
       
     // Identity Sanity: common noise words that split identities unnecessarily
-    norm = norm.replace(/\b(hd|4k|official|full|series|סדרה|תרגום|מובנה|מלא|full hd)\b/gi, '');
+    norm = norm.replace(/\b(hd|4k|official|full|series|סדרה|תרגום|מובנה|מלא|full hd|עונה|פרק|מתורגם|מדובב|איכות)\b/gi, '');
     
     // Final compact key
     return norm.replace(/\s+/g, '').trim();

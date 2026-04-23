@@ -22,6 +22,8 @@ class Indexer {
     // FIFO queue of source objects to process
     this.queue = [];
     this.isRunning = false;
+    this.paused = false;
+    this._resumeWaiters = [];
 
     // Optional progress callback: (sourceId, stateObj) => void
     this.onProgress = null;
@@ -65,10 +67,28 @@ class Indexer {
     this._processQueue();
   }
 
+  pause() {
+    this.paused = true;
+  }
+
+  resume() {
+    if (!this.paused) return;
+    this.paused = false;
+    const waiters = this._resumeWaiters.splice(0);
+    waiters.forEach(resolve => resolve());
+    this._processQueue();
+  }
+
+  async _waitIfPaused() {
+    if (!this.paused) return;
+    await new Promise(resolve => this._resumeWaiters.push(resolve));
+  }
+
   async _processQueue() {
     if (this.isRunning || this.queue.length === 0) return;
     this.isRunning = true;
     while (this.queue.length > 0) {
+      await this._waitIfPaused();
       const { source, force } = this.queue.shift();
       try {
         await this._doIndex(source, force);
@@ -117,6 +137,7 @@ class Indexer {
       let hasMore  = true;
 
       while (hasMore) {
+        await this._waitIfPaused();
         hasMore = false;
 
         // Fetch a page of Telegram messages
@@ -143,6 +164,7 @@ class Indexer {
           // Critical for Android TV: keeps the spatial nav and remote control
           // responsive during long indexing sessions.
           if (count % 20 === 0) {
+            await this._waitIfPaused();
             await new Promise(r => setTimeout(r, 0));
           }
 
@@ -290,6 +312,7 @@ class Indexer {
             break;
           }
           // Telegram flood-ban protection: pause between pages
+          await this._waitIfPaused();
           await new Promise(r => setTimeout(r, 1000));
         }
       } // end while(hasMore)

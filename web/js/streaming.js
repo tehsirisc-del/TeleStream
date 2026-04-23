@@ -16,6 +16,63 @@ const Streaming = (() => {
   let currentRequestId = -1;
   let activeAbortFlag = { aborted: false };
 
+  const isAndroidNative = !!(window.Capacitor && /Android/i.test(navigator.userAgent || ''));
+  const isLeanDevice = isAndroidNative && ((navigator.hardwareConcurrency || 4) <= 4);
+  const TELEGRAM_WORKERS = isAndroidNative ? (isLeanDevice ? 2 : 3) : 2;
+  const TELEGRAM_READ_SIZE = 1024 * 1024;
+  const POST_BATCH_SIZE = isLeanDevice ? 512 * 1024 : 1024 * 1024;
+  const MAX_BATCH_WAIT_MS = isLeanDevice ? 150 : 100;
+
+  function buildTelegramMessageLink(sourceLink, messageId) {
+    if (!sourceLink || !messageId) return null;
+
+    try {
+      const url = new URL(sourceLink);
+      const parts = url.pathname.split('/').filter(Boolean);
+      if (!parts.length) return null;
+
+      if (parts[0] === 'c' && parts.length >= 2) {
+        return `https://t.me/c/${parts[1]}/${messageId}`;
+      }
+
+      return `https://t.me/${parts[0]}/${messageId}`;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  async function postChunk(reqId, offset, body, abortFlag) {
+    while (true) {
+      if (abortFlag.aborted || String(reqId) !== currentRequestId || !isStreaming) {
+        throw new Error("ABORTED_BY_NEW_REQUEST");
+      }
+
+      try {
+        const res = await fetch(`http://127.0.0.1:9992/feed?reqId=${reqId}&offset=${offset}`, {
+          method: 'POST',
+          body
+        });
+        if (res.ok) return;
+      } catch (_) {}
+
+      await new Promise(r => setTimeout(r, 100));
+    }
+  }
+
+  async function flushBufferedParts(reqId, startOffset, parts, totalLength, abortFlag) {
+    if (!totalLength) return startOffset;
+
+    const merged = new Uint8Array(totalLength);
+    let writeOffset = 0;
+    for (const part of parts) {
+      merged.set(part, writeOffset);
+      writeOffset += part.length;
+    }
+
+    await postChunk(reqId, startOffset, merged, abortFlag);
+    return startOffset + totalLength;
+  }
+
 
   async function attachBridgeListenersOnce() {
     if (listenersAttached) return true;
@@ -68,7 +125,9 @@ const Streaming = (() => {
       currentRequestId = String(requestId);
       const myReqId = String(requestId);
 
-      if (window.appLog) await window.appLog(`[Bridge] HTTP Local Stream: offset=${offset}`, '#38bdf8');
+      if (window.nativeDebugEnabled && window.appLog) {
+        window.appLog(`[Bridge] Stream request offset=${offset}`, '#38bdf8');
+      }
 
       try {
         const { Api } = window.TelegramModule || require('telegram');
@@ -79,11 +138,15 @@ const Streaming = (() => {
           thumbSize: ''
         });
 
-        const BLOCK_SIZE = 1024 * 1024; // 1MB chunk reads for higher throughput
+        const BLOCK_SIZE = TELEGRAM_READ_SIZE;
         let currentOffset = offset;
         let runningLimit = length > 0 ? length : undefined;
         let retryCount = 0;
         const MAX_RETRIES = 5;
+        let pendingParts = [];
+        let pendingBytes = 0;
+        let pendingOffset = currentOffset;
+        let pendingSince = 0;
 
         // Resilient loop: downloads chunks and transparently reconnects on Telegram timeouts.
         while (currentOffset < (length > 0 ? (offset + length) : Infinity)) {
@@ -96,8 +159,8 @@ const Streaming = (() => {
               file: fileLoc,
               offset: window.bigInt ? window.bigInt(alignedOffset) : alignedOffset,
               limit: runningLimit ? runningLimit + bytesToDiscard : undefined,
-              requestSize: Math.min(BLOCK_SIZE, 1024 * 1024),
-              workers: 2, 
+              requestSize: BLOCK_SIZE,
+              workers: TELEGRAM_WORKERS,
               dcId: activeStreamSession.document.dcId || undefined
             };
 
@@ -122,34 +185,35 @@ const Streaming = (() => {
                         }
                     }
 
-                    // Push binary array to native loopback server
-                    let accepted = false;
-                    while (!accepted) {
-                        if (myAbortFlag.aborted || myReqId !== currentRequestId || !isStreaming) {
-                            throw new Error("ABORTED_BY_NEW_REQUEST");
-                        }
-                        try {
-                            const res = await fetch(`http://127.0.0.1:9992/feed?reqId=${myReqId}&offset=${currentOffset}`, {
-                                method: 'POST',
-                                body: arr
-                            });
-                            accepted = res.ok;
-                        } catch (err) {
-                            accepted = false; 
-                        }
-                        if (!accepted) { 
-                            await new Promise(r => setTimeout(r, 100));
-                        }
+                    if (!pendingBytes) {
+                        pendingOffset = currentOffset;
+                        pendingSince = Date.now();
                     }
-                    
-                    currentOffset += arr.length;
-                    if (runningLimit) runningLimit -= arr.length;
+
+                    pendingParts.push(arr);
+                    pendingBytes += arr.length;
+
+                    if (pendingBytes >= POST_BATCH_SIZE || (Date.now() - pendingSince) >= MAX_BATCH_WAIT_MS) {
+                        currentOffset = await flushBufferedParts(myReqId, pendingOffset, pendingParts, pendingBytes, myAbortFlag);
+                        if (runningLimit) runningLimit -= pendingBytes;
+                        pendingParts = [];
+                        pendingBytes = 0;
+                        pendingSince = 0;
+                    }
                     
                     // Reset retry on successful chunk incoming
                     retryCount = 0;
 
-                    if (runningLimit <= 0) break;
+                    if (runningLimit !== undefined && runningLimit <= 0) break;
                 } // end for await
+
+                if (pendingBytes > 0) {
+                    currentOffset = await flushBufferedParts(myReqId, pendingOffset, pendingParts, pendingBytes, myAbortFlag);
+                    if (runningLimit) runningLimit -= pendingBytes;
+                    pendingParts = [];
+                    pendingBytes = 0;
+                    pendingSince = 0;
+                }
                 
                 // Natural EOF or reached limit
                 break;
@@ -168,7 +232,9 @@ const Streaming = (() => {
                 const backoff = Math.min(1000 * Math.pow(2, retryCount - 1), 5000);
                 console.warn(`[Streaming] Telegram retry ${retryCount}/${MAX_RETRIES} in ${backoff}ms at offset ${currentOffset}. Msg: ${iterErr.message}`);
                 
-                if (window.appLog) window.appLog(`[Bridge] Link dropped. Retry ${retryCount}/${MAX_RETRIES}...`, '#f59e0b');
+                if (window.nativeDebugEnabled && window.appLog) {
+                  window.appLog(`[Bridge] Link retry ${retryCount}/${MAX_RETRIES}`, '#f59e0b');
+                }
                 await new Promise(r => setTimeout(r, backoff));
             }
         } // end while
@@ -181,7 +247,7 @@ const Streaming = (() => {
       } catch (err) {
         if (err.message !== "ABORTED_BY_NEW_REQUEST") {
             console.error('[Streaming] iterDownload top-level error:', err);
-            if (window.appLog) await window.appLog(`[Bridge] ERROR: ${err.message}`, '#ef4444');
+            if (window.appLog) await window.appLog(`[Bridge] ERROR: ${err.message}`, '#ef4444', 'error');
         } else {
             console.log(`[Streaming] Clean abort of request ${myReqId}`);
         }
@@ -262,14 +328,19 @@ const Streaming = (() => {
     }
 
     const peerId = message.peerId || {};
+    const peerType = peerId.channelId ? 'channel' : (peerId.userId ? 'user' : 'chat');
     const channelStr = (peerId.channelId || peerId.userId || peerId.chatId || 'unknown').toString();
+    const source = message.sourceId ? await window.DB.getSourceById(message.sourceId) : null;
+    const messageLink = buildTelegramMessageLink(source?.link, activeStreamSession.messageId);
 
     if (onStatus) onStatus({ mode: 'Local Binary Stream' });
 
     try {
         await StreamPlayer.play({
             messageId: activeStreamSession.messageId,
+            peerType,
             channel: channelStr,
+            messageLink,
             title,
             fileSize: activeStreamSession.totalSize,
             progress: window.currentEpProgress || 0,
