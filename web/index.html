@@ -1595,7 +1595,7 @@ async function startWizardQrSession() {
           name: data.name,
           photo: data.photo,
           type: data.type,
-          isSingle: true // Default for auto-added channels
+          isSingle: data.type !== 'multi'
         };
         stopWizardQrSession();
         await validateStepLink(true); // Auto-mode
@@ -1668,13 +1668,27 @@ function normalizeTelegramLink(raw) {
 
 async function validateStepLink(isAuto = false) {
   const input = document.getElementById('wizard-link-input');
-  let raw = input ? input.value.trim() : '';
-  if (!raw && !isAuto) { showToast('Link is required', 'error'); return; }
+  let raw = '';
+  if (isAuto) {
+    raw = wizardPendingData.link || (input ? input.value.trim() : '');
+  } else {
+    raw = input ? input.value.trim() : '';
+  }
+  if (!raw) {
+    if (!isAuto) {
+      showToast('Link is required', 'error');
+      return;
+    }
+    console.error('[Wizard] Auto validation failed: missing link payload');
+    goToAddStep('link');
+    showToast('QR share failed. Please try again.', 'error');
+    return;
+  }
   
   let link = normalizeTelegramLink(raw);
   console.log('[Wizard] Validating normalized link:', link);
   
-  if (!isAuto) wizardPendingData.link = link;
+  wizardPendingData.link = link;
   goToAddStep('loading');
   
   try {
