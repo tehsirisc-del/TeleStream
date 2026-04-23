@@ -14,7 +14,8 @@ import java.io.RandomAccessFile;
 
 public class NativeTelegramDataSource extends BaseDataSource {
     private static final long WAIT_TIMEOUT_MS = 30_000L;
-    private static final long REQUEST_GRANULARITY_BYTES = 512L * 1024L;
+    private static final long REQUEST_GRANULARITY_BYTES = 4L * 1024L * 1024L;
+    private static final long PREFETCH_LOW_WATERMARK_BYTES = 6L * 1024L * 1024L;
 
     private final NativeTelegramDownloadSession session;
 
@@ -32,7 +33,7 @@ public class NativeTelegramDataSource extends BaseDataSource {
     @Override
     public long open(@NonNull DataSpec dataSpec) throws IOException {
         long position = dataSpec.position;
-        requestBytesAt(position);
+        requestBytesAt(position, true);
 
         if (!session.awaitReadable(Math.max(1L, position + 1L), WAIT_TIMEOUT_MS)) {
             throw new IOException("Timed out waiting for native Telegram file bootstrap");
@@ -69,10 +70,15 @@ public class NativeTelegramDataSource extends BaseDataSource {
         }
 
         while (true) {
-            requestBytesAt(currentPosition);
-
             long availableFrom = session.getAvailableFrom();
             long availableUntil = session.getAvailableUntil();
+            if (currentPosition < availableFrom || currentPosition >= availableUntil) {
+                requestBytesAt(currentPosition, true);
+                availableFrom = session.getAvailableFrom();
+                availableUntil = session.getAvailableUntil();
+            } else if (!session.isCompleted() && (availableUntil - currentPosition) <= PREFETCH_LOW_WATERMARK_BYTES) {
+                requestBytesAt(Math.max(currentPosition, availableUntil), false);
+            }
             if (currentPosition >= availableFrom && currentPosition < availableUntil) {
                 break;
             }
@@ -125,14 +131,18 @@ public class NativeTelegramDataSource extends BaseDataSource {
         transferEnded();
     }
 
-    private void requestBytesAt(long offset) {
+    private void requestBytesAt(long offset, boolean blocking) {
         long normalizedOffset = Math.max(0L, offset);
         if (lastRequestedOffset != Long.MIN_VALUE &&
                 Math.abs(normalizedOffset - lastRequestedOffset) < REQUEST_GRANULARITY_BYTES) {
             return;
         }
 
-        TelegramNativeManager.prioritizeDownloadBlocking(session.getFileId(), normalizedOffset);
+        if (blocking) {
+            TelegramNativeManager.prioritizeDownloadBlocking(session.getFileId(), normalizedOffset);
+        } else {
+            TelegramNativeManager.prioritizeDownloadAsync(session.getFileId(), normalizedOffset);
+        }
         lastRequestedOffset = normalizedOffset;
     }
 }

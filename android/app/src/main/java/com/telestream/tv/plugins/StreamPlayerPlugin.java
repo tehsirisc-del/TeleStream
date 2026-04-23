@@ -576,32 +576,10 @@ public class StreamPlayerPlugin extends Plugin {
 
         dialog.setOnDismissListener(d -> {
             Log.d(TAG, "dialog dismissed — releasing player (Session " + sessionId + ")");
-
-            long currentPos = 0;
-            long currentDur = 0;
-            if (thisPlayer != null) {
-                // Sanitize: ExoPlayer returns TIME_UNSET (-huge number) if not ready.
-                // Clamping to 0 prevents garbage values in the database.
-                currentPos = Math.max(0, thisPlayer.getCurrentPosition());
-                currentDur = Math.max(0, thisPlayer.getDuration());
-            }
-
-            if (player == thisPlayer) {
-                player = null;
-            }
-            if (thisPlayer != null) {
-                thisPlayer.release();
-            }
-
-            // Only fire if it's the current session.
             if (sessionId == currentSessionId) {
-                // ADB-Only Debug
-                Log.d(TAG, "[TELESTREAM_DEBUG] Player closing. Session=" + sessionId + " Pos=" + currentPos + " Dur=" + currentDur);
-                
-                JSObject data = new JSObject();
-                data.put("progress", currentPos);
-                data.put("duration", currentDur);
-                emitEvent("player_closed", data);
+                releasePlayer(false);
+            } else if (thisPlayer != null) {
+                thisPlayer.release();
             }
         });
 

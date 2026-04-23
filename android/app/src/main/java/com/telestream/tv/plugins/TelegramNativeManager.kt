@@ -33,11 +33,13 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import java.util.Locale
+import java.io.File as JavaFile
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 
 object TelegramNativeManager {
     private const val TAG = "TelegramNative"
+    private const val TDLIB_FILES_DIR_NAME = "tdlib-files"
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val authStateFlow = MutableStateFlow(AuthSnapshot(state = "idle"))
@@ -71,6 +73,7 @@ object TelegramNativeManager {
         this.appContext = context.applicationContext
         this.apiId = apiId
         this.apiHash = apiHash
+        cleanupTdlibFilesAsync(context.applicationContext)
 
         if (client == null) {
             synchronized(this) {
@@ -254,14 +257,18 @@ object TelegramNativeManager {
             return
         }
 
+        val localPath = session.getLocalPath()
         session.close()
         downloadSessions.remove(session.fileId)
 
-        val activeClient = client ?: return
-        when (activeClient.cancelDownloadFile(session.fileId, false)) {
-            is TdlResult.Failure -> {}
-            is TdlResult.Success -> {}
+        val activeClient = client
+        if (activeClient != null) {
+            when (activeClient.cancelDownloadFile(session.fileId, false)) {
+                is TdlResult.Failure -> {}
+                is TdlResult.Success -> {}
+            }
         }
+        deleteLocalFile(localPath)
     }
 
     @JvmStatic
@@ -293,6 +300,13 @@ object TelegramNativeManager {
     @JvmStatic
     fun prioritizeDownloadBlocking(fileId: Int, offset: Long) {
         runBlocking(Dispatchers.IO) {
+            prioritizeDownload(fileId, offset)
+        }
+    }
+
+    @JvmStatic
+    fun prioritizeDownloadAsync(fileId: Int, offset: Long) {
+        scope.launch {
             prioritizeDownload(fileId, offset)
         }
     }
@@ -508,6 +522,51 @@ object TelegramNativeManager {
         Log.d(TAG, "emit(" + snapshot + ")")
         authStateFlow.update { snapshot }
         listeners.forEach { listener -> listener(snapshot) }
+    }
+
+    private fun cleanupTdlibFilesAsync(context: Context) {
+        scope.launch {
+            try {
+                pruneDirectory(context.getDir(TDLIB_FILES_DIR_NAME, Context.MODE_PRIVATE))
+            } catch (e: Exception) {
+                Log.w(TAG, "cleanupTdlibFilesAsync failed", e)
+            }
+        }
+    }
+
+    private fun pruneDirectory(root: JavaFile?) {
+        if (root == null || !root.exists()) {
+            return
+        }
+        root.listFiles()?.forEach { child ->
+            if (child.isDirectory) {
+                pruneDirectory(child)
+                child.listFiles()?.takeIf { it.isEmpty() }?.let {
+                    child.delete()
+                }
+            } else {
+                child.delete()
+            }
+        }
+    }
+
+    private fun deleteLocalFile(path: String?) {
+        if (path.isNullOrBlank()) {
+            return
+        }
+        try {
+            val file = JavaFile(path)
+            if (file.exists() && !file.delete()) {
+                Log.w(TAG, "Failed to delete local TDLib file: $path")
+            }
+            file.parentFile?.let { parent ->
+                if (parent.isDirectory && parent.listFiles().isNullOrEmpty()) {
+                    parent.delete()
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "deleteLocalFile failed for $path", e)
+        }
     }
 
     private data class NativeMediaInfo(
