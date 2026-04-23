@@ -5,11 +5,13 @@ class Updater {
         this.snoozeDurationMs = 24 * 60 * 60 * 1000; // 24 hours
         this.overlay = null;
         this.isUpdating = false;
+        this.updateUi = null;
+        this.pendingInstall = false;
         
         // Listen for progress events
         if (UpdateCheckerPlugin) {
             UpdateCheckerPlugin.addListener('download_progress', (info) => {
-                this.updateProgress(info.progress);
+                this.updateProgress(info.progress, info.apkReady === true);
             });
         }
     }
@@ -81,6 +83,8 @@ class Updater {
 
     showUpdateDialog(info) {
         if (this.overlay) return; // Already showing
+        this.pendingInstall = false;
+        this.updateUi = null;
 
         const overlay = document.createElement('div');
         overlay.id = 'update-overlay';
@@ -161,6 +165,14 @@ class Updater {
 
         document.body.appendChild(overlay);
         this.overlay = overlay;
+        this.updateUi = {
+            updateBtn,
+            laterBtn,
+            btnContainer,
+            progressContainer,
+            progressText,
+            progressBar
+        };
 
         // Slide up
         setTimeout(() => {
@@ -175,12 +187,23 @@ class Updater {
         };
 
         updateBtn.onclick = () => {
+            if (this.pendingInstall) {
+                UpdateCheckerPlugin.installDownloadedApk().catch(e => {
+                    console.error('Manual install failed', e);
+                    alert("Installation could not be started. Please try again.");
+                });
+                return;
+            }
             if (this.isUpdating) return;
             this.isUpdating = true;
-            btnContainer.style.display = 'none';
+            laterBtn.style.display = 'none';
             progressContainer.style.display = 'block';
             progressText.style.display = 'block';
-            
+            updateBtn.innerText = 'Downloading...';
+            updateBtn.disabled = true;
+            updateBtn.style.opacity = '0.7';
+            updateBtn.style.cursor = 'default';
+
             UpdateCheckerPlugin.downloadAndInstall({ downloadUrl: info.downloadUrl }).catch(e => {
                 console.error('Update failed', e);
                 alert("Update download failed. Please try again later.");
@@ -250,8 +273,26 @@ class Updater {
         const text = document.getElementById('update-progress-text');
         if (bar && text) {
             bar.style.width = percent + '%';
+            if (percent >= 100) {
+                text.innerText = 'Download complete. Press Install Now if setup does not start.';
+                this.enableManualInstall();
+                return;
+            }
             text.innerText = `Downloading... ${percent}%`;
         }
+    }
+
+    enableManualInstall() {
+        if (!this.updateUi || this.pendingInstall) return;
+        const { updateBtn } = this.updateUi;
+        this.pendingInstall = true;
+        this.isUpdating = false;
+        updateBtn.disabled = false;
+        updateBtn.innerText = 'Install Now';
+        updateBtn.style.opacity = '1';
+        updateBtn.style.cursor = 'pointer';
+        updateBtn.style.backgroundColor = '#16a34a';
+        updateBtn.focus();
     }
 
     dismissDialog() {
@@ -271,6 +312,8 @@ class Updater {
             }
             this.overlay = null;
             this.isUpdating = false;
+            this.pendingInstall = false;
+            this.updateUi = null;
         }, 500);
     }
 }

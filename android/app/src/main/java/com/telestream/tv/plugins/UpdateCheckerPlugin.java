@@ -40,6 +40,7 @@ public class UpdateCheckerPlugin extends Plugin {
 
     private ExecutorService executorService;
     private Handler mainHandler;
+    private volatile File downloadedApkFile;
 
     @Override
     public void load() {
@@ -143,6 +144,7 @@ public class UpdateCheckerPlugin extends Plugin {
                 if (outputFile.exists()) {
                     outputFile.delete();
                 }
+                downloadedApkFile = null;
 
                 InputStream input = new BufferedInputStream(url.openStream(), 8192);
                 FileOutputStream output = new FileOutputStream(outputFile);
@@ -172,23 +174,15 @@ public class UpdateCheckerPlugin extends Plugin {
 
                 JSObject finishData = new JSObject();
                 finishData.put("progress", 100);
+                finishData.put("apkReady", true);
                 notifyListeners("download_progress", finishData);
+                downloadedApkFile = outputFile;
 
                 // Install APK - Trigger on Main Thread for improved reliability
                 mainHandler.post(() -> {
                     try {
                         Log.d(TAG, "Download complete. Triggering system installer.");
-                        Uri apkUri = FileProvider.getUriForFile(
-                                getContext(),
-                                getContext().getPackageName() + ".fileprovider",
-                                outputFile
-                        );
-
-                        Intent intent = new Intent(Intent.ACTION_VIEW);
-                        intent.setDataAndType(apkUri, "application/vnd.android.package-archive");
-                        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-                        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                        getContext().startActivity(intent);
+                        launchInstaller(outputFile);
                         call.resolve();
                     } catch (Exception e) {
                         Log.e(TAG, "Failed to start install activity", e);
@@ -201,6 +195,49 @@ public class UpdateCheckerPlugin extends Plugin {
                 mainHandler.post(() -> call.reject("DOWNLOAD_ERROR", e.getMessage()));
             }
         });
+    }
+
+    @PluginMethod
+    public void installDownloadedApk(PluginCall call) {
+        File apkFile = downloadedApkFile;
+        if (apkFile == null) {
+            File updateDir = new File(getContext().getExternalCacheDir(), "apk_updates");
+            File candidate = new File(updateDir, "update.apk");
+            if (candidate.exists()) {
+                apkFile = candidate;
+                downloadedApkFile = candidate;
+            }
+        }
+
+        if (apkFile == null || !apkFile.exists()) {
+            call.reject("APK_NOT_READY", "Downloaded update was not found");
+            return;
+        }
+
+        final File finalApkFile = apkFile;
+        mainHandler.post(() -> {
+            try {
+                launchInstaller(finalApkFile);
+                call.resolve();
+            } catch (Exception e) {
+                Log.e(TAG, "Failed to relaunch installer", e);
+                call.reject("INSTALL_ERROR", e.getMessage());
+            }
+        });
+    }
+
+    private void launchInstaller(File apkFile) {
+        Uri apkUri = FileProvider.getUriForFile(
+                getContext(),
+                getContext().getPackageName() + ".fileprovider",
+                apkFile
+        );
+
+        Intent intent = new Intent(Intent.ACTION_VIEW);
+        intent.setDataAndType(apkUri, "application/vnd.android.package-archive");
+        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        getContext().startActivity(intent);
     }
 
     /**

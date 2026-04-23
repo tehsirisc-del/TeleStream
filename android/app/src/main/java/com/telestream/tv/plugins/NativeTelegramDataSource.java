@@ -1,6 +1,7 @@
 package com.telestream.tv.plugins;
 
 import android.net.Uri;
+import android.os.SystemClock;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
@@ -14,8 +15,10 @@ import java.io.RandomAccessFile;
 
 public class NativeTelegramDataSource extends BaseDataSource {
     private static final long WAIT_TIMEOUT_MS = 30_000L;
-    private static final long REQUEST_GRANULARITY_BYTES = 4L * 1024L * 1024L;
-    private static final long PREFETCH_LOW_WATERMARK_BYTES = 6L * 1024L * 1024L;
+    private static final long BLOCKING_REQUEST_GRANULARITY_BYTES = 512L * 1024L;
+    private static final long PREFETCH_REQUEST_GRANULARITY_BYTES = 1L * 1024L * 1024L;
+    private static final long PREFETCH_LOW_WATERMARK_BYTES = 12L * 1024L * 1024L;
+    private static final long REQUEST_RETRY_COOLDOWN_MS = 750L;
 
     private final NativeTelegramDownloadSession session;
 
@@ -23,7 +26,10 @@ public class NativeTelegramDataSource extends BaseDataSource {
     private long currentPosition;
     private long remaining;
     private boolean opened;
-    private long lastRequestedOffset = Long.MIN_VALUE;
+    private long lastBlockingRequestOffset = Long.MIN_VALUE;
+    private long lastPrefetchRequestOffset = Long.MIN_VALUE;
+    private long lastBlockingRequestAtMs = 0L;
+    private long lastPrefetchRequestAtMs = 0L;
 
     public NativeTelegramDataSource(NativeTelegramDownloadSession session) {
         super(true);
@@ -133,16 +139,36 @@ public class NativeTelegramDataSource extends BaseDataSource {
 
     private void requestBytesAt(long offset, boolean blocking) {
         long normalizedOffset = Math.max(0L, offset);
-        if (lastRequestedOffset != Long.MIN_VALUE &&
-                Math.abs(normalizedOffset - lastRequestedOffset) < REQUEST_GRANULARITY_BYTES) {
-            return;
+        long now = SystemClock.elapsedRealtime();
+        long availableFrom = session.getAvailableFrom();
+        long availableUntil = session.getAvailableUntil();
+        long lastOffset = blocking ? lastBlockingRequestOffset : lastPrefetchRequestOffset;
+        long lastRequestAtMs = blocking ? lastBlockingRequestAtMs : lastPrefetchRequestAtMs;
+        long granularityBytes = blocking
+                ? BLOCKING_REQUEST_GRANULARITY_BYTES
+                : PREFETCH_REQUEST_GRANULARITY_BYTES;
+
+        boolean movedEnough =
+                lastOffset == Long.MIN_VALUE ||
+                        Math.abs(normalizedOffset - lastOffset) >= granularityBytes;
+        boolean outsideReadableWindow =
+                normalizedOffset < availableFrom || normalizedOffset >= availableUntil;
+        boolean retryAllowed = (now - lastRequestAtMs) >= REQUEST_RETRY_COOLDOWN_MS;
+
+        if (!movedEnough) {
+            if (!(outsideReadableWindow && retryAllowed)) {
+                return;
+            }
         }
 
         if (blocking) {
             TelegramNativeManager.prioritizeDownloadBlocking(session.getFileId(), normalizedOffset);
+            lastBlockingRequestOffset = normalizedOffset;
+            lastBlockingRequestAtMs = now;
         } else {
             TelegramNativeManager.prioritizeDownloadAsync(session.getFileId(), normalizedOffset);
+            lastPrefetchRequestOffset = normalizedOffset;
+            lastPrefetchRequestAtMs = now;
         }
-        lastRequestedOffset = normalizedOffset;
     }
 }
